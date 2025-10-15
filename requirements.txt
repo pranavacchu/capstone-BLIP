@@ -18,7 +18,7 @@ sentence-transformers==2.2.2
 FlagEmbedding>=1.2.0
 
 # Vector Database
-pinecone-client==3.0.0
+pinecone>=3.0.0
 
 # Optional but recommended
 scipy==1.11.4

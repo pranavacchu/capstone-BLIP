@@ -3,7 +3,6 @@ Pinecone Vector Database Integration Module
 Handles Pinecone initialization, index management, and semantic search
 """
 
-import pinecone
 from pinecone import Pinecone, ServerlessSpec, PodSpec
 import numpy as np
 import logging
