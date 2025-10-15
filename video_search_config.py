@@ -1,0 +1,76 @@
+"""
+Configuration file for Video Frame Search System
+"""
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+class Config:
+    """Configuration class for the video search system"""
+    
+    # API Keys (load from environment variables for security)
+    PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '')
+    PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT', 'us-east-1')
+    PINECONE_HOST = os.getenv('PINECONE_HOST', 'https://capstone-b5a0x4x.svc.aped-4627-b74a.pinecone.io')
+    
+    # Pinecone Index Configuration
+    PINECONE_INDEX_NAME = 'capstone'
+    PINECONE_DIMENSION = 1024  # For llama-text-embed-v2
+    PINECONE_METRIC = 'cosine'
+    PINECONE_CLOUD = 'aws'
+    PINECONE_REGION = 'us-east-1'
+    
+    # Model Configuration
+    BLIP_MODEL = 'Salesforce/blip-image-captioning-base'
+    # Using a model compatible with 1024 dimensions
+    EMBEDDING_MODEL = 'BAAI/bge-large-en-v1.5'  # 1024 dimensions
+    # Alternative: 'thenlper/gte-large' (1024 dimensions)
+    
+    # Frame Extraction Configuration
+    FRAME_SIMILARITY_THRESHOLD = 0.85  # Keep frames differing by >15%
+    FRAME_EXTRACTION_INTERVAL = 1.0  # Extract frame every N seconds (if not using similarity)
+    MAX_FRAMES_PER_VIDEO = 1000  # Maximum frames to extract per video
+    FRAME_RESIZE_WIDTH = 640  # Resize frames for memory efficiency (None for original size)
+    
+    # Processing Configuration
+    BLIP_BATCH_SIZE = 8  # Batch size for BLIP caption generation
+    EMBEDDING_BATCH_SIZE = 32  # Batch size for embedding generation
+    PINECONE_BATCH_SIZE = 100  # Batch size for Pinecone uploads
+    
+    # Query Configuration
+    QUERY_TOP_K = 10  # Number of results to return
+    QUERY_SIMILARITY_THRESHOLD = 0.6  # Minimum similarity score for results
+    DUPLICATE_TIME_WINDOW = 2.0  # Seconds within which to consider frames as duplicates
+    
+    # Logging Configuration
+    LOG_LEVEL = 'INFO'
+    LOG_FILE = 'video_search.log'
+    
+    # Performance Configuration
+    USE_GPU = True  # Use GPU if available
+    NUM_WORKERS = 4  # Number of workers for data loading
+    
+    # File paths
+    TEMP_DIR = './temp'
+    OUTPUT_DIR = './output'
+    
+    @classmethod
+    def validate(cls):
+        """Validate configuration settings"""
+        if not cls.PINECONE_API_KEY:
+            raise ValueError("PINECONE_API_KEY not set. Please set it in .env file or environment variables")
+        
+        if cls.PINECONE_DIMENSION not in [384, 768, 1024, 1536]:
+            print(f"Warning: Unusual embedding dimension {cls.PINECONE_DIMENSION}. Common values are 384, 768, 1024, or 1536")
+        
+        if cls.FRAME_SIMILARITY_THRESHOLD < 0 or cls.FRAME_SIMILARITY_THRESHOLD > 1:
+            raise ValueError("FRAME_SIMILARITY_THRESHOLD must be between 0 and 1")
+        
+        # Create directories if they don't exist
+        os.makedirs(cls.TEMP_DIR, exist_ok=True)
+        os.makedirs(cls.OUTPUT_DIR, exist_ok=True)
+        
+        return True
