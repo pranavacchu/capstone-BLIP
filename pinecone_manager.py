@@ -142,19 +142,24 @@ class PineconeManager:
     def upload_embeddings(self,
                          data: List[Tuple[str, List[float], Dict]],
                          batch_size: int = 100,
-                         namespace: str = "") -> bool:
+                         namespace: str = "",
+                         max_retries: int = 3) -> int:
         """
-        Upload embeddings to Pinecone
+        Upload embeddings to Pinecone with retry logic
         
         Args:
             data: List of (id, vector, metadata) tuples
             batch_size: Batch size for uploads
             namespace: Namespace for organization (optional)
+            max_retries: Maximum retry attempts for failed batches
             
         Returns:
-            Success status
+            Number of vectors actually uploaded
         """
         logger.info(f"Uploading {len(data)} vectors to Pinecone")
+        
+        uploaded_count = 0
+        failed_batches = []
         
         try:
             # Upload in batches
@@ -170,15 +175,34 @@ class PineconeManager:
                         'metadata': metadata
                     })
                 
-                # Upsert batch
-                self.index.upsert(vectors=vectors, namespace=namespace)
+                # Upsert batch with retry
+                success = False
+                for attempt in range(max_retries):
+                    try:
+                        response = self.index.upsert(vectors=vectors, namespace=namespace)
+                        uploaded_count += response.get('upserted_count', len(vectors))
+                        success = True
+                        break
+                    except Exception as batch_error:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Batch upload attempt {attempt + 1} failed, retrying...")
+                            time.sleep(1 * (attempt + 1))  # Exponential backoff
+                        else:
+                            logger.error(f"Batch upload failed after {max_retries} attempts: {batch_error}")
+                            failed_batches.append(batch)
+                
+                if not success:
+                    logger.warning(f"Failed to upload batch starting at index {i}")
             
-            logger.info(f"Successfully uploaded {len(data)} vectors")
-            return True
+            if failed_batches:
+                logger.warning(f"Failed to upload {len(failed_batches)} batches ({sum(len(b) for b in failed_batches)} vectors)")
+            
+            logger.info(f"Successfully uploaded {uploaded_count} vectors")
+            return uploaded_count
             
         except Exception as e:
             logger.error(f"Failed to upload embeddings: {e}")
-            return False
+            return uploaded_count
     
     def query(self,
              query_vector: np.ndarray,

@@ -169,35 +169,59 @@ class VideoSearchEngine:
                 captioned_frames=captioned_frames
             )
             
+            # Step 3.5: Deduplicate embeddings before upload
+            logger.info("Deduplicating embeddings...")
+            captions_before_dedupe = len(embedded_frames)
+            embedded_frames = self.embedding_generator.deduplicate_embeddings(
+                embedded_frames=embedded_frames,
+                similarity_threshold=0.95  # Remove very similar embeddings
+            )
+            logger.info(f"After deduplication: {len(embedded_frames)} unique embeddings")
+            
             # Step 4: Upload to Pinecone
+            actual_uploaded = 0
             if upload_to_pinecone:
                 logger.info("Step 4/4: Uploading to Pinecone...")
                 pinecone_data = self.embedding_generator.prepare_for_pinecone(
                     embedded_frames=embedded_frames,
-                    video_name=video_name
+                    video_name=video_name,
+                    source_file_path=video_path
                 )
                 
-                success = self.pinecone_manager.upload_embeddings(
+                actual_uploaded = self.pinecone_manager.upload_embeddings(
                     data=pinecone_data,
                     batch_size=self.config.PINECONE_BATCH_SIZE
                 )
                 
-                if not success:
-                    logger.warning("Failed to upload some embeddings to Pinecone")
+                # Print verification
+                if actual_uploaded > 0:
+                    sample_ids = [pinecone_data[i][0] for i in range(min(3, len(pinecone_data)))]
+                    logger.info(f"✅ Pinecone upsert confirmed: {actual_uploaded} vectors uploaded for {video_name}")
+                    logger.info(f"   Sample IDs: {', '.join(sample_ids)}...")
+                else:
+                    logger.warning("No vectors were successfully uploaded to Pinecone")
             
             # Store processed frames
             self.processed_frames = embedded_frames
             
             # Calculate statistics
             processing_time = time.time() - start_time
+            
+            # Calculate frame reduction correctly
+            total_video_frames = len(frames)  # Frames before similarity filtering
+            frames_after_caption = len(captioned_frames)  # Frames that got captions
+            frame_reduction_pct = ((total_video_frames - frames_after_caption) / total_video_frames * 100) if total_video_frames > 0 else 0
+            
             stats = {
                 "video_name": video_name,
                 "video_path": video_path,
-                "total_frames_extracted": len(frames),
-                "frames_with_captions": len(captioned_frames),
-                "embeddings_generated": len(embedded_frames),
-                "embeddings_uploaded": len(pinecone_data) if upload_to_pinecone else 0,
+                "total_frames_extracted": total_video_frames,
+                "frames_with_captions": frames_after_caption,
+                "captions_before_dedupe": captions_before_dedupe,
+                "embeddings_generated": len(embedded_frames),  # After dedupe
+                "embeddings_uploaded": actual_uploaded if upload_to_pinecone else 0,
                 "processing_time_seconds": processing_time,
+                "frame_reduction_percent": frame_reduction_pct,
                 "caption_stats": self.caption_generator.get_caption_statistics(captioned_frames),
                 "embedding_stats": self.embedding_generator.get_embedding_statistics(embedded_frames)
             }

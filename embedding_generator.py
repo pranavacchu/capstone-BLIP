@@ -263,7 +263,8 @@ class TextEmbeddingGenerator:
     
     def prepare_for_pinecone(self, 
                            embedded_frames: List[EmbeddedFrame],
-                           video_name: str = "video") -> List[Tuple[str, List[float], Dict]]:
+                           video_name: str = "video",
+                           source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
         """
         Prepare data for Pinecone upload
         
@@ -289,7 +290,8 @@ class TextEmbeddingGenerator:
                 'caption': ef.captioned_frame.caption,
                 'frame_id': ef.captioned_frame.frame_data.frame_id,
                 'frame_index': ef.captioned_frame.frame_data.frame_index,
-                'video_name': video_name
+'video_name': video_name,
+                'source_file_path': source_file_path
             }
             
             pinecone_data.append((unique_id, vector, metadata))
