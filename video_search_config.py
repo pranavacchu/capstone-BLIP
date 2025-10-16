@@ -30,10 +30,16 @@ class Config:
     # Alternative: 'thenlper/gte-large' (1024 dimensions)
     
     # Frame Extraction Configuration
-    FRAME_SIMILARITY_THRESHOLD = 0.85  # Keep frames differing by >15%
-    FRAME_EXTRACTION_INTERVAL = 1.0  # Extract frame every N seconds (if not using similarity)
+    FRAME_SIMILARITY_THRESHOLD = 0.90  # Higher threshold to capture more frames (only skip very similar frames)
+    FRAME_EXTRACTION_INTERVAL = 2.0  # Extract frame every N seconds (if not using similarity)
     MAX_FRAMES_PER_VIDEO = 1000  # Maximum frames to extract per video
     FRAME_RESIZE_WIDTH = 640  # Resize frames for memory efficiency (None for original size)
+    MIN_FRAMES_PER_VIDEO = 10  # Minimum frames to extract regardless of similarity
+    
+    # Enhanced Caption Configuration
+    GENERATE_MULTIPLE_CAPTIONS = True  # Generate multiple object-focused captions per frame
+    CAPTIONS_PER_FRAME = 3  # Number of different captions to generate per frame
+    USE_OBJECT_FOCUSED_PROMPTS = True  # Use object-focused prompts for more detailed descriptions
     
     # Processing Configuration
     BLIP_BATCH_SIZE = 8  # Batch size for BLIP caption generation
@@ -43,7 +49,7 @@ class Config:
     # Query Configuration
     QUERY_TOP_K = 10  # Number of results to return
     QUERY_SIMILARITY_THRESHOLD = 0.6  # Minimum similarity score for results
-    DUPLICATE_TIME_WINDOW = 2.0  # Seconds within which to consider frames as duplicates
+    DUPLICATE_TIME_WINDOW = 5.0  # Seconds within which to consider frames as duplicates (increased for multi-captions)
     
     # Logging Configuration
     LOG_LEVEL = 'INFO'

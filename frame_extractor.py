@@ -32,7 +32,8 @@ class VideoFrameExtractor:
     def __init__(self, 
                  similarity_threshold: float = 0.85,
                  max_frames: int = 1000,
-                 resize_width: Optional[int] = 640):
+                 resize_width: Optional[int] = 640,
+                 min_frames: int = 10):
         """
         Initialize the frame extractor
         
@@ -40,10 +41,12 @@ class VideoFrameExtractor:
             similarity_threshold: Threshold for frame similarity (0-1)
             max_frames: Maximum number of frames to extract
             resize_width: Width to resize frames (None for original size)
+            min_frames: Minimum number of frames to extract
         """
         self.similarity_threshold = similarity_threshold
         self.max_frames = max_frames
         self.resize_width = resize_width
+        self.min_frames = min_frames
         self.frames_data = []
         
     def extract_frames(self, video_path: str, 

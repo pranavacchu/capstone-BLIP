@@ -79,9 +79,11 @@ class VideoSearchEngine:
             self.caption_generator = BlipCaptionGenerator(
                 model_name=self.config.BLIP_MODEL,
                 batch_size=self.config.BLIP_BATCH_SIZE,
-                use_gpu=self.config.USE_GPU
+                use_gpu=self.config.USE_GPU,
+                generate_multiple_captions=getattr(self.config, 'GENERATE_MULTIPLE_CAPTIONS', False),
+                captions_per_frame=getattr(self.config, 'CAPTIONS_PER_FRAME', 3)
             )
-            logger.info("Caption generator initialized")
+            logger.info("Caption generator initialized with multi-caption support")
         
         if not self.embedding_generator:
             self.embedding_generator = TextEmbeddingGenerator(
