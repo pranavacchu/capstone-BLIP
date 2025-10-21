@@ -18,6 +18,7 @@ from frame_extractor import VideoFrameExtractor, FrameData
 from caption_generator import BlipCaptionGenerator, CaptionedFrame
 from embedding_generator import TextEmbeddingGenerator, EmbeddedFrame
 from pinecone_manager import PineconeManager, SearchResult
+from object_caption_pipeline import ObjectCaptionPipeline, ObjectCaption
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +58,7 @@ class VideoSearchEngine:
         self.caption_generator = None
         self.embedding_generator = None
         self.pinecone_manager = None
+        self.object_pipeline = None  # Object-focused captioning pipeline
         
         # Processing state
         self.current_video = None
@@ -109,7 +111,8 @@ class VideoSearchEngine:
                      video_path: str,
                      video_name: Optional[str] = None,
                      save_frames: bool = False,
-                     upload_to_pinecone: bool = True) -> Dict[str, Any]:
+                     upload_to_pinecone: bool = True,
+                     use_object_detection: bool = False) -> Dict[str, Any]:
         """
         Process a video file end-to-end
         
@@ -118,6 +121,7 @@ class VideoSearchEngine:
             video_name: Name for the video (uses filename if None)
             save_frames: Whether to save extracted frames to disk
             upload_to_pinecone: Whether to upload embeddings to Pinecone
+            use_object_detection: Whether to use object detection + captioning pipeline
             
         Returns:
             Processing statistics and results
@@ -152,10 +156,44 @@ class VideoSearchEngine:
             
             # Step 2: Generate captions
             logger.info("Step 2/4: Generating captions...")
-            captioned_frames = self.caption_generator.generate_captions(
-                frames=frames,
-                filter_empty=True
-            )
+            
+            if use_object_detection:
+                # Use object-focused captioning pipeline
+                logger.info("Using object detection + captioning pipeline")
+                
+                if not self.object_pipeline:
+                    from object_caption_pipeline import ObjectCaptionPipeline
+                    self.object_pipeline = ObjectCaptionPipeline(
+                        use_gpu=self.config.USE_GPU,
+                        min_object_size=30,
+                        max_objects_per_frame=10,
+                        include_scene_caption=True  # Fallback to scene caption if no objects
+                    )
+                
+                # Process frames with object detection
+                object_captions = self.object_pipeline.process_frames(
+                    frames=frames,
+                    show_progress=True
+                )
+                
+                # Convert ObjectCaption to CaptionedFrame format
+                captioned_frames = []
+                for oc in object_captions:
+                    cf = CaptionedFrame(
+                        frame_data=oc.frame_data,
+                        caption=oc.attribute_caption,
+                        confidence=oc.confidence
+                    )
+                    captioned_frames.append(cf)
+                
+                logger.info(f"Object detection pipeline generated {len(captioned_frames)} captions")
+                
+            else:
+                # Use standard BLIP captioning
+                captioned_frames = self.caption_generator.generate_captions(
+                    frames=frames,
+                    filter_empty=True
+                )
             
             # Filter duplicate captions
             captioned_frames = self.caption_generator.filter_duplicate_captions(
@@ -246,6 +284,8 @@ class VideoSearchEngine:
                 self.caption_generator.clear_gpu_cache()
             if self.embedding_generator:
                 self.embedding_generator.clear_cache()
+            if self.object_pipeline:
+                self.object_pipeline.clear_cache()
     
     def search(self,
               query: str,
@@ -406,6 +446,8 @@ class VideoSearchEngine:
             self.caption_generator.unload_model()
         if self.embedding_generator:
             self.embedding_generator.unload_model()
+        if self.object_pipeline:
+            self.object_pipeline.unload_models()
         
         logger.info("Resources cleaned up")
 
