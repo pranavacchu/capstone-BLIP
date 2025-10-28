@@ -334,6 +334,65 @@ class TextEmbeddingGenerator:
         
         return augmented
     
+    def deduplicate_embeddings(self,
+                              embedded_frames: List[EmbeddedFrame],
+                              similarity_threshold: float = 0.95) -> List[EmbeddedFrame]:
+        """
+        Remove duplicate embeddings based on similarity threshold
+        
+        Args:
+            embedded_frames: List of EmbeddedFrame objects
+            similarity_threshold: Minimum similarity to consider as duplicate (0.0 to 1.0)
+            
+        Returns:
+            List of unique EmbeddedFrame objects
+        """
+        if not embedded_frames:
+            return []
+        
+        if len(embedded_frames) <= 1:
+            return embedded_frames
+        
+        logger.info(f"Deduplicating {len(embedded_frames)} embeddings with threshold {similarity_threshold}")
+        
+        # Convert to numpy array for efficient computation
+        embeddings = np.array([ef.embedding for ef in embedded_frames])
+        
+        # Track which embeddings to keep
+        keep_mask = np.ones(len(embedded_frames), dtype=bool)
+        
+        # Compare each embedding with subsequent ones
+        for i in range(len(embeddings)):
+            if not keep_mask[i]:
+                continue
+            
+            # Compute similarity with all subsequent embeddings
+            for j in range(i + 1, len(embeddings)):
+                if not keep_mask[j]:
+                    continue
+                
+                # Compute cosine similarity
+                if self.normalize:
+                    # If normalized, use dot product
+                    similarity = np.dot(embeddings[i], embeddings[j])
+                else:
+                    # Compute cosine similarity manually
+                    similarity = np.dot(embeddings[i], embeddings[j]) / (
+                        np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[j])
+                    )
+                
+                # Mark as duplicate if similarity exceeds threshold
+                if similarity >= similarity_threshold:
+                    keep_mask[j] = False
+        
+        # Filter embeddings based on keep mask
+        unique_frames = [ef for ef, keep in zip(embedded_frames, keep_mask) if keep]
+        
+        removed_count = len(embedded_frames) - len(unique_frames)
+        logger.info(f"Removed {removed_count} duplicate embeddings, kept {len(unique_frames)} unique")
+        
+        return unique_frames
+    
     def get_embedding_statistics(self, embedded_frames: List[EmbeddedFrame]) -> Dict:
         """Get statistics about embeddings"""
         if not embedded_frames:
