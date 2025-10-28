@@ -208,6 +208,14 @@ class ObjectCaptionPipeline:
         
         return filtered
     
+    def _score_attribute_caption(self, caption: str, object_label: str) -> float:
+        """Heuristic score: prefer captions mentioning colors/attributes and the label."""
+        c = (caption or "").lower()
+        color_hits = sum(1 for w in self._color_words if w in c)
+        label_hit = 2.0 if object_label.lower() in c else 0.0
+        length_bonus = min(len(c.split()) / 10.0, 1.0)  # small bonus up to 1
+        return color_hits * 1.5 + label_hit + length_bonus
+    
     def _caption_object(self, cropped_image: Image.Image, object_label: str) -> str:
         """
         Generate attribute-focused caption for a detected object
