@@ -147,8 +147,8 @@ class GroundingDINODetector:
             with torch.no_grad():
                 outputs = self.model(**casted_inputs)
             
-            # Post-process results
-            results = self.processor.post_process_grounded_object_detection(
+            # Post-process results (Grounding DINO)
+            results = self.processor.post_process_grounding(
                 outputs,
                 inputs["input_ids"],
                 box_threshold=self.box_threshold,
@@ -213,8 +213,8 @@ class GroundingDINODetector:
                         casted_inputs[k] = v
                     with torch.no_grad():
                         outputs = self.model(**casted_inputs)
-                    # Post-process results
-                    results = self.processor.post_process_grounded_object_detection(
+                    # Post-process results (Grounding DINO)
+                    results = self.processor.post_process_grounding(
                         outputs,
                         casted_inputs["input_ids"],
                         box_threshold=self.box_threshold,
