@@ -81,11 +81,18 @@ class ObjectCaptionPipeline:
             self.caption_generator = caption_generator
         
         # Attribute-focused prompts for BLIP
+        # Tuned to elicit attributes (color, material, style) instead of actions
         self.attribute_prompts = [
-            "describe the color and appearance of",
-            "what type of",
-            "describe this"
+            "a close-up photo of the {label}. Describe color, material, and notable attributes",
+            "describe the {label} focusing on color, style, and accessories",
+            "{label}. Provide a short attribute-focused description (color, size, pattern)"
         ]
+        
+        # Common color words to help score candidate captions
+        self._color_words = set([
+            'black','white','gray','grey','red','orange','yellow','green','blue','purple','pink',
+            'brown','beige','tan','gold','silver','navy','maroon','teal'
+        ])
         
         logger.info("Object-focused captioning pipeline initialized")
     
@@ -213,29 +220,38 @@ class ObjectCaptionPipeline:
             Attribute-focused caption string
         """
         try:
-            # Use BLIP to generate caption for the cropped object
-            # We'll use a simple prompt to focus on attributes
-            inputs = self.caption_generator.processor(
-                images=cropped_image,
-                return_tensors="pt"
-            )
-            inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
+            # Build attribute-focused prompts that explicitly mention the object label
+            prompts = [p.format(label=object_label) for p in self.attribute_prompts]
+            candidate_caps: List[str] = []
             
             with torch.no_grad():
-                outputs = self.caption_generator.model.generate(
-                    **inputs,
-                    max_length=30,
-                    num_beams=3,
-                    do_sample=False,
-                    early_stopping=True
-                )
+                for prompt in prompts:
+                    inputs = self.caption_generator.processor(
+                        images=cropped_image,
+                        text=prompt,
+                        return_tensors="pt",
+                        padding=True
+                    )
+                    inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
+                    outputs = self.caption_generator.model.generate(
+                        **inputs,
+                        max_length=30,
+                        num_beams=3,
+                        do_sample=False,
+                        early_stopping=True
+                    )
+                    cap = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
+                    candidate_caps.append(cap)
             
-            caption = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
+            # Pick the best candidate by a simple attribute score (colors + presence of label)
+            best_caption = max(
+                candidate_caps,
+                key=lambda c: self._score_attribute_caption(c, object_label)
+            ) if candidate_caps else ""
             
             # Clean and format caption to focus on attributes
-            caption = self._format_attribute_caption(caption, object_label)
-            
-            return caption
+            best_caption = self._format_attribute_caption(best_caption, object_label)
+            return best_caption
             
         except Exception as e:
             logger.error(f"Error captioning object {object_label}: {e}")
@@ -253,29 +269,28 @@ class ObjectCaptionPipeline:
             Formatted attribute caption
         """
         # Clean caption
-        caption = blip_caption.strip()
+        caption = (blip_caption or "").strip()
         
-        # If caption is too generic or action-focused, simplify
-        action_words = ['walking', 'running', 'sitting', 'standing', 'holding', 'carrying']
-        
-        # Remove action phrases for more object-focused description
+        # Remove action verbs to avoid action-centric phrasing
+        action_words = ['walking', 'running', 'sitting', 'standing', 'holding', 'carrying', 'talking']
+        lowered = caption.lower()
         for action in action_words:
-            if action in caption.lower():
-                # Keep only the descriptive parts
-                parts = caption.lower().split(action)
-                if len(parts) > 1:
-                    # Try to extract object description
-                    caption = parts[-1].strip()
+            if action in lowered:
+                parts = lowered.split(action)
+                lowered = (parts[0] + " " + parts[-1]).strip()
+        caption = lowered.strip().capitalize()
         
-        # Ensure object type is mentioned
+        # Ensure object label is explicitly mentioned
         if object_label.lower() not in caption.lower():
-            caption = f"{object_label.title()}: {caption}"
+            # Prefer forms like "Orange hoodie" -> "Hoodie: orange hoodie"
+            if caption:
+                caption = f"{object_label.title()}: {caption}"
+            else:
+                caption = object_label.title()
         
-        # Capitalize and add period
-        if caption:
-            caption = caption[0].upper() + caption[1:]
-            if not caption.endswith('.'):
-                caption += '.'
+        # Normalize ending punctuation
+        if caption and caption[-1] not in '.!?':
+            caption += '.'
         
         return caption
     
