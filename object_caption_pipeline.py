@@ -228,38 +228,25 @@ class ObjectCaptionPipeline:
             Attribute-focused caption string
         """
         try:
-            # Build attribute-focused prompts that explicitly mention the object label
-            prompts = [p.format(label=object_label) for p in self.attribute_prompts]
-            candidate_caps: List[str] = []
-            
+            # Generate single unconditional caption for the cropped object
             with torch.no_grad():
-                for prompt in prompts:
-                    inputs = self.caption_generator.processor(
-                        images=cropped_image,
-                        text=prompt,
-                        return_tensors="pt",
-                        padding=True
-                    )
-                    inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
-                    outputs = self.caption_generator.model.generate(
-                        **inputs,
-                        max_length=30,
-                        num_beams=3,
-                        do_sample=False,
-                        early_stopping=True
-                    )
-                    cap = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
-                    candidate_caps.append(cap)
+                inputs = self.caption_generator.processor(
+                    images=cropped_image,
+                    return_tensors="pt"
+                )
+                inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
+                outputs = self.caption_generator.model.generate(
+                    **inputs,
+                    max_length=25,
+                    num_beams=5,
+                    do_sample=False,
+                    early_stopping=True
+                )
+                raw_caption = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
             
-            # Pick the best candidate by a simple attribute score (colors + presence of label)
-            best_caption = max(
-                candidate_caps,
-                key=lambda c: self._score_attribute_caption(c, object_label)
-            ) if candidate_caps else ""
-            
-            # Clean and format caption to focus on attributes
-            best_caption = self._format_attribute_caption(best_caption, object_label)
-            return best_caption
+            # Format with object label and clean up
+            formatted_caption = self._format_attribute_caption(raw_caption, object_label)
+            return formatted_caption
             
         except Exception as e:
             logger.error(f"Error captioning object {object_label}: {e}")
@@ -279,28 +266,36 @@ class ObjectCaptionPipeline:
         # Clean caption
         caption = (blip_caption or "").strip()
         
-        # Remove action verbs to avoid action-centric phrasing
-        action_words = ['walking', 'running', 'sitting', 'standing', 'holding', 'carrying', 'talking']
-        lowered = caption.lower()
-        for action in action_words:
-            if action in lowered:
-                parts = lowered.split(action)
-                lowered = (parts[0] + " " + parts[-1]).strip()
-        caption = lowered.strip().capitalize()
+        # Extract color words from caption
+        colors_found = [w for w in self._color_words if w in caption.lower()]
         
-        # Ensure object label is explicitly mentioned
-        if object_label.lower() not in caption.lower():
-            # Prefer forms like "Orange hoodie" -> "Hoodie: orange hoodie"
-            if caption:
-                caption = f"{object_label.title()}: {caption}"
-            else:
-                caption = object_label.title()
+        # Remove action verbs to focus on attributes
+        action_words = ['walking', 'running', 'sitting', 'standing', 'holding', 'carrying', 'talking', 'wearing']
+        tokens = caption.lower().split()
+        filtered_tokens = [t for t in tokens if t not in action_words]
+        caption = ' '.join(filtered_tokens).strip().capitalize()
+        
+        # Build object-oriented caption
+        obj_type = object_label.title()
+        
+        if colors_found and caption:
+            # Example: "Backpack: black backpack with straps"
+            color_str = colors_found[0]  # Use first detected color
+            if color_str not in caption.lower():
+                caption = f"{color_str} {caption}"
+            formatted = f"{obj_type}: {caption}"
+        elif caption:
+            # Example: "Person: person in outdoor setting"
+            formatted = f"{obj_type}: {caption}"
+        else:
+            # Fallback: just the object type
+            formatted = obj_type
         
         # Normalize ending punctuation
-        if caption and caption[-1] not in '.!?':
-            caption += '.'
+        if formatted and formatted[-1] not in '.!?':
+            formatted += '.'
         
-        return caption
+        return formatted
     
     def _generate_scene_caption(self, frame_data: FrameData) -> Optional[ObjectCaption]:
         """

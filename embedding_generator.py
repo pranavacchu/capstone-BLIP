@@ -277,9 +277,10 @@ class TextEmbeddingGenerator:
         """
         pinecone_data = []
         
-        for ef in embedded_frames:
-            # Create unique ID
-            unique_id = ef.embedding_id
+        for idx, ef in enumerate(embedded_frames):
+            # Create unique ID that includes object index to avoid collisions
+            # Format: frameID_objectIdx_emb
+            unique_id = f"{ef.captioned_frame.frame_data.frame_id}_obj{idx}_emb"
             
             # Convert embedding to list
             vector = ef.embedding.tolist()
