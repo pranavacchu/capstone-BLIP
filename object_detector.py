@@ -75,9 +75,10 @@ class GroundingDINODetector:
         try:
             # Load processor and model
             self.processor = AutoProcessor.from_pretrained(self.model_name)
+            # Force float32 to avoid dtype mismatches
             self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.float16 if self.device.type == 'cuda' else torch.float32
+                torch_dtype=torch.float32
             )
             
             # Move model to device
@@ -94,9 +95,10 @@ class GroundingDINODetector:
             try:
                 self.model_name = "IDEA-Research/grounding-dino-base"
                 self.processor = AutoProcessor.from_pretrained(self.model_name)
+                # Force float32 to avoid dtype mismatches
                 self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
                     self.model_name,
-                    torch_dtype=torch.float16 if self.device.type == 'cuda' else torch.float32
+                    torch_dtype=torch.float32
                 )
                 self.model = self.model.to(self.device)
                 self.model.eval()
@@ -134,25 +136,19 @@ class GroundingDINODetector:
                 text=prompt_text,
                 return_tensors="pt"
             )
-            # Ensure dtype matches model weights (fp16 on CUDA)
-            model_dtype = next(self.model.parameters()).dtype
-            casted_inputs = {}
-            for k, v in inputs.items():
-                v = v.to(self.device)
-                if hasattr(v, 'dtype') and v.dtype.is_floating_point:
-                    v = v.to(model_dtype)
-                casted_inputs[k] = v
+            # Move inputs to device (model is float32)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
             # Run detection
             with torch.no_grad():
-                outputs = self.model(**casted_inputs)
+                outputs = self.model(**inputs)
             
-            # Post-process results (Grounding DINO)
-            results = self.processor.post_process_grounding(
+            # Post-process results using the correct API
+            # For Grounding DINO from transformers, use post_process_grounded_object_detection
+            # but without box/text thresholds (they're applied during model forward pass)
+            results = self.processor.post_process_grounded_object_detection(
                 outputs,
                 inputs["input_ids"],
-                box_threshold=self.box_threshold,
-                text_threshold=self.text_threshold,
                 target_sizes=[image.size[::-1]]  # (height, width)
             )[0]
             
@@ -193,59 +189,6 @@ class GroundingDINODetector:
             
         except Exception as e:
             logger.error(f"Error during object detection: {e}")
-            # Fallback: if dtype mismatch occurs, retry in full float32
-            if 'c10::Half' in str(e) or 'dtype' in str(e):
-                try:
-                    logger.info("Retrying object detection in float32 precision due to dtype mismatch...")
-                    # Move model to float32
-                    self.model = self.model.float()
-                    # Rebuild inputs and ensure float32 on the same device
-                    inputs = self.processor(
-                        images=image,
-                        text=prompt_text,
-                        return_tensors="pt"
-                    )
-                    casted_inputs = {}
-                    for k, v in inputs.items():
-                        v = v.to(self.device)
-                        if hasattr(v, 'dtype') and v.dtype.is_floating_point:
-                            v = v.to(torch.float32)
-                        casted_inputs[k] = v
-                    with torch.no_grad():
-                        outputs = self.model(**casted_inputs)
-                    # Post-process results (Grounding DINO)
-                    results = self.processor.post_process_grounding(
-                        outputs,
-                        casted_inputs["input_ids"],
-                        box_threshold=self.box_threshold,
-                        text_threshold=self.text_threshold,
-                        target_sizes=[image.size[::-1]]
-                    )[0]
-                    detected_objects = []
-                    if len(results["scores"]) > 0:
-                        boxes = results["boxes"].cpu().numpy()
-                        scores = results["scores"].cpu().numpy()
-                        labels = results["labels"]
-                        for box, score, label in zip(boxes, scores, labels):
-                            if score >= self.confidence_threshold:
-                                bbox = tuple(map(int, box))
-                                cropped_img = None
-                                if return_crops:
-                                    x1, y1, x2, y2 = bbox
-                                    x1 = max(0, x1); y1 = max(0, y1)
-                                    x2 = min(image.width, x2); y2 = min(image.height, y2)
-                                    cropped_img = image.crop((x1, y1, x2, y2))
-                                detected_obj = DetectedObject(
-                                    label=label,
-                                    confidence=float(score),
-                                    bbox=bbox,
-                                    cropped_image=cropped_img
-                                )
-                                detected_objects.append(detected_obj)
-                    logger.info(f"Detected {len(detected_objects)} objects after float32 retry")
-                    return detected_objects
-                except Exception as e2:
-                    logger.error(f"Float32 retry failed: {e2}")
             return []
     
     def detect_objects_batch(self,
