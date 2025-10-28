@@ -11,6 +11,7 @@ import json
 import time
 from datetime import datetime
 import pandas as pd
+import numpy as np
 
 # Import all modules
 from video_search_config import Config
@@ -210,10 +211,17 @@ class VideoSearchEngine:
             # Step 3.5: Deduplicate embeddings before upload
             logger.info("Deduplicating embeddings...")
             captions_before_dedupe = len(embedded_frames)
-            embedded_frames = self.embedding_generator.deduplicate_embeddings(
-                embedded_frames=embedded_frames,
-                similarity_threshold=0.95  # Remove very similar embeddings
-            )
+            # Fallback if embedding generator lacks deduplication API
+            if hasattr(self.embedding_generator, 'deduplicate_embeddings'):
+                embedded_frames = self.embedding_generator.deduplicate_embeddings(
+                    embedded_frames=embedded_frames,
+                    similarity_threshold=0.95  # Remove very similar embeddings
+                )
+            else:
+                embedded_frames = self._deduplicate_embeddings(
+                    embedded_frames=embedded_frames,
+                    similarity_threshold=0.95
+                )
             logger.info(f"After deduplication: {len(embedded_frames)} unique embeddings")
             
             # Step 4: Upload to Pinecone
@@ -287,6 +295,40 @@ class VideoSearchEngine:
             if self.object_pipeline:
                 self.object_pipeline.clear_cache()
     
+    def _deduplicate_embeddings(self,
+                               embedded_frames: List[EmbeddedFrame],
+                               similarity_threshold: float = 0.95) -> List[EmbeddedFrame]:
+        """Deduplicate embeddings locally if generator lacks the method."""
+        if not embedded_frames:
+            return []
+        if len(embedded_frames) == 1:
+            return embedded_frames
+        # Stack embeddings
+        embeddings = np.array([ef.embedding for ef in embedded_frames])
+        # If embeddings are normalized, cosine similarity is dot product
+        normalized = True
+        # Heuristic: check mean norm ~1.0
+        norms = np.linalg.norm(embeddings, axis=1)
+        if not np.allclose(norms.mean(), 1.0, atol=1e-2):
+            normalized = False
+        keep = np.ones(len(embeddings), dtype=bool)
+        for i in range(len(embeddings)):
+            if not keep[i]:
+                continue
+            vec_i = embeddings[i]
+            for j in range(i + 1, len(embeddings)):
+                if not keep[j]:
+                    continue
+                vec_j = embeddings[j]
+                if normalized:
+                    sim = float(np.dot(vec_i, vec_j))
+                else:
+                    denom = (np.linalg.norm(vec_i) * np.linalg.norm(vec_j)) or 1e-8
+                    sim = float(np.dot(vec_i, vec_j) / denom)
+                if sim >= similarity_threshold:
+                    keep[j] = False
+        return [ef for ef, k in zip(embedded_frames, keep) if k]
+
     def search(self,
               query: str,
               top_k: int = None,

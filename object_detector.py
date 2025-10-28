@@ -134,11 +134,18 @@ class GroundingDINODetector:
                 text=prompt_text,
                 return_tensors="pt"
             )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # Ensure dtype matches model weights (fp16 on CUDA)
+            model_dtype = next(self.model.parameters()).dtype
+            casted_inputs = {}
+            for k, v in inputs.items():
+                v = v.to(self.device)
+                if hasattr(v, 'dtype') and v.dtype.is_floating_point:
+                    v = v.to(model_dtype)
+                casted_inputs[k] = v
             
             # Run detection
             with torch.no_grad():
-                outputs = self.model(**inputs)
+                outputs = self.model(**casted_inputs)
             
             # Post-process results
             results = self.processor.post_process_grounded_object_detection(
