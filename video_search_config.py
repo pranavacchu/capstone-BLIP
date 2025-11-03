@@ -14,20 +14,20 @@ class Config:
     # API Keys (load from environment variables for security)
     PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '')
     PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT', 'us-east-1')
-    PINECONE_HOST = os.getenv('PINECONE_HOST', 'https://capstone-b5a0x4x.svc.aped-4627-b74a.pinecone.io')
+    PINECONE_HOST = os.getenv('PINECONE_HOST', 'https://test-b5a0x4x.svc.aped-4627-b74a.pinecone.io')
     
     # Pinecone Index Configuration
-    PINECONE_INDEX_NAME = 'capstone'
-    PINECONE_DIMENSION = 1024  # For llama-text-embed-v2
+    PINECONE_INDEX_NAME = 'test'
+    PINECONE_DIMENSION = 1024  # For multilingual-e5-large
     PINECONE_METRIC = 'cosine'
     PINECONE_CLOUD = 'aws'
     PINECONE_REGION = 'us-east-1'
     
     # Model Configuration
     BLIP_MODEL = 'Salesforce/blip-image-captioning-base'
-    # Using a model compatible with 1024 dimensions
-    EMBEDDING_MODEL = 'BAAI/bge-large-en-v1.5'  # 1024 dimensions
-    # Alternative: 'thenlper/gte-large' (1024 dimensions)
+    # Using multilingual-e5-large for better semantic understanding
+    EMBEDDING_MODEL = 'intfloat/multilingual-e5-large'  # 1024 dimensions
+    # Alternative: 'sentence-transformers/all-MiniLM-L6-v2' (384 dimensions)
     
     # Frame Extraction Configuration
     FRAME_SIMILARITY_THRESHOLD = 0.90  # Higher threshold to capture more frames (only skip very similar frames)
