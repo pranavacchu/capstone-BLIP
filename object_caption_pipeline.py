@@ -208,14 +208,6 @@ class ObjectCaptionPipeline:
         
         return filtered
     
-    def _score_attribute_caption(self, caption: str, object_label: str) -> float:
-        """Heuristic score: prefer captions mentioning colors/attributes and the label."""
-        c = (caption or "").lower()
-        color_hits = sum(1 for w in self._color_words if w in c)
-        label_hit = 2.0 if object_label.lower() in c else 0.0
-        length_bonus = min(len(c.split()) / 10.0, 1.0)  # small bonus up to 1
-        return color_hits * 1.5 + label_hit + length_bonus
-    
     def _caption_object(self, cropped_image: Image.Image, object_label: str) -> str:
         """
         Generate attribute-focused caption for a detected object
@@ -228,7 +220,7 @@ class ObjectCaptionPipeline:
             Attribute-focused caption string
         """
         try:
-            # Generate single unconditional caption for the cropped object
+            # Generate caption for the cropped object
             with torch.no_grad():
                 inputs = self.caption_generator.processor(
                     images=cropped_image,
@@ -237,14 +229,14 @@ class ObjectCaptionPipeline:
                 inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
                 outputs = self.caption_generator.model.generate(
                     **inputs,
-                    max_length=25,
-                    num_beams=5,
+                    max_length=30,
+                    num_beams=4,
                     do_sample=False,
                     early_stopping=True
                 )
                 raw_caption = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
             
-            # Format with object label and clean up
+            # Format with object label
             formatted_caption = self._format_attribute_caption(raw_caption, object_label)
             return formatted_caption
             
