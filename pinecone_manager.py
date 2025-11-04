@@ -442,16 +442,45 @@ class PineconeManager:
         """Get index statistics"""
         try:
             stats = self.index.describe_index_stats()
-            return {
+            
+            # Get index description for additional metadata
+            index_description = None
+            try:
+                index_description = self.pc.describe_index(self.index_name)
+            except Exception as desc_error:
+                logger.warning(f"Could not fetch index description: {desc_error}")
+            
+            result = {
+                'index_name': self.index_name,
                 'total_vectors': stats.get('total_vector_count', 0),
                 'dimension': stats.get('dimension', self.dimension),
                 'index_fullness': stats.get('index_fullness', 0),
-                'namespaces': stats.get('namespaces', {})
+                'namespaces': stats.get('namespaces', {}),
+                'metric': self.metric
             }
+            
+            # Add capacity mode if available from index description
+            if index_description:
+                # Check if it's serverless or pod-based
+                if hasattr(index_description, 'spec') and hasattr(index_description.spec, 'serverless'):
+                    result['capacity'] = 'Serverless'
+                elif hasattr(index_description, 'spec') and hasattr(index_description.spec, 'pod'):
+                    result['capacity'] = 'Pod-based'
+                else:
+                    result['capacity'] = 'Serverless' if self.use_serverless else 'Pod-based'
+            else:
+                result['capacity'] = 'Serverless' if self.use_serverless else 'Pod-based'
+            
+            return result
             
         except Exception as e:
             logger.error(f"Failed to get index stats: {e}")
-            return {}
+            return {
+                'index_name': self.index_name,
+                'total_vectors': 0,
+                'dimension': self.dimension,
+                'capacity': 'Serverless' if self.use_serverless else 'Pod-based'
+            }
     
     def clear_index(self, namespace: str = "") -> bool:
         """
