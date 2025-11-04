@@ -258,6 +258,9 @@ class ObjectCaptionPipeline:
                 )
                 raw_caption = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
             
+            # Clean the raw caption to remove special characters
+            raw_caption = self._clean_raw_caption(raw_caption)
+            
             # Format with object label
             formatted_caption = self._format_attribute_caption(raw_caption, object_label)
             return formatted_caption
@@ -277,6 +280,9 @@ class ObjectCaptionPipeline:
         Returns:
             Formatted attribute caption
         """
+        # Clean and validate object label first
+        object_label = self._clean_object_label(object_label)
+        
         # Clean caption
         caption = (blip_caption or "").strip()
         
@@ -408,6 +414,87 @@ class ObjectCaptionPipeline:
         }
         
         return stats
+    
+    def _clean_raw_caption(self, caption: str) -> str:
+        """
+        Clean raw caption from BLIP to remove special characters and noise
+        
+        Args:
+            caption: Raw caption from BLIP model
+            
+        Returns:
+            Cleaned caption text
+        """
+        if not caption:
+            return ""
+        
+        import re
+        
+        # Remove special character prefixes (e.g., "##El:", "@@tag:", etc.)
+        caption = re.sub(r'^[#@!$%^&*]+[a-zA-Z]*\s*:\s*', '', caption)
+        
+        # Remove standalone special characters
+        caption = re.sub(r'\s+[#@!$%^&*]+\s+', ' ', caption)
+        
+        # Remove HTML/XML-like tags
+        caption = re.sub(r'<[^>]+>', '', caption)
+        
+        # Keep only alphanumeric, spaces, and basic punctuation
+        caption = re.sub(r'[^a-zA-Z0-9\s\.\,\-\'\"]+', ' ', caption)
+        
+        # Clean up multiple spaces
+        caption = ' '.join(caption.split())
+        
+        # Remove very short tokens (likely noise)
+        tokens = caption.split()
+        cleaned_tokens = [t for t in tokens if len(t) > 1 or t.lower() in ['a', 'i']]
+        caption = ' '.join(cleaned_tokens)
+        
+        return caption.strip()
+    
+    def _clean_object_label(self, label: str) -> str:
+        """
+        Clean and validate object label to remove invalid characters
+        
+        Args:
+            label: Raw object label from detector
+            
+        Returns:
+            Cleaned, valid object label
+        """
+        if not label:
+            return "object"
+        
+        # Remove common noise patterns
+        import re
+        
+        # Remove special characters at the start (like ##, @@, etc.)
+        label = re.sub(r'^[#@!$%^&*]+', '', label)
+        
+        # Remove any non-alphanumeric characters except spaces and hyphens
+        label = re.sub(r'[^a-zA-Z0-9\s\-]', '', label)
+        
+        # Clean up whitespace
+        label = ' '.join(label.split())
+        
+        # If label is too short or empty after cleaning, use default
+        if len(label) < 2:
+            return "object"
+        
+        # Convert to lowercase for consistency
+        label = label.lower().strip()
+        
+        # Validate against known object types
+        valid_prefixes = ['bag', 'backpack', 'duffel', 'laptop', 'computer', 'tablet',
+                         'helmet', 'bottle', 'water', 'folder', 'file', 'umbrella',
+                         'coat', 'jacket', 'suitcase', 'luggage', 'person', 'object']
+        
+        # If label doesn't start with any valid prefix, use generic "object"
+        if not any(label.startswith(prefix) for prefix in valid_prefixes):
+            logger.debug(f"Invalid label detected: '{label}', using 'object'")
+            return "object"
+        
+        return label
     
     def _is_unique_caption(self, caption: str) -> bool:
         """
