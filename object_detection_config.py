@@ -28,33 +28,26 @@ class ObjectDetectionConfig:
     MIN_OBJECT_SIZE = 30  # Minimum object size in pixels
     MAX_OBJECTS_PER_FRAME = 10  # Limit objects to caption per frame
     
-    # Campus Surveillance Object Categories
+    # Target Objects Only - Specific items to detect and caption
     SURVEILLANCE_OBJECTS = [
-        # Bags and backpacks
-        "backpack", "bag", "school bag", "handbag", "purse", "suitcase",
-        "laptop bag", "messenger bag", "tote bag",
+        # Bags and carrying items
+        "duffel bag", "duffel", "backpack", "bag",
         
         # Electronics
         "laptop", "computer", "tablet",
-        "phone", "mobile phone", "smartphone", "cellphone",
         
         # Safety equipment
-        "helmet", "motorcycle helmet", "bicycle helmet", "safety helmet",
+        "helmet",
         
         # Containers
-        "bottle", "water bottle", "thermos",
-        "cup", "mug",
-        
-        # Vehicles
-        "bicycle", "bike", "motorcycle", "scooter",
-        "car", "vehicle", "van", "truck",
+        "bottle", "water bottle",
         
         # Personal items
-        "book", "notebook", "textbook",
-        "umbrella", "jacket", "coat",
+        "file folder", "folder", "document folder",
+        "umbrella", "coat", "jacket",
         
-        # People
-        "person", "student", "people"
+        # Travel items
+        "suitcase", "luggage"
     ]
     
     # Frame Extraction Settings

@@ -168,8 +168,12 @@ class VideoSearchEngine:
                         use_gpu=self.config.USE_GPU,
                         min_object_size=30,
                         max_objects_per_frame=10,
-                        include_scene_caption=True  # Fallback to scene caption if no objects
+                        include_scene_caption=False,  # Don't generate scene captions
+                        caption_similarity_threshold=0.85  # Filter similar captions
                     )
+                
+                # Reset caption history for new video
+                self.object_pipeline.reset_caption_history()
                 
                 # Process frames with object detection
                 object_captions = self.object_pipeline.process_frames(

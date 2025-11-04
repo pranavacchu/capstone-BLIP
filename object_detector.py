@@ -52,17 +52,25 @@ class GroundingDINODetector:
         self.device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu")
         logger.info(f"Using device: {self.device}")
         
-        # Default detection categories for campus surveillance
+        # Default detection categories (updated to target objects only)
         self.default_prompts = [
-            "backpack", "bag", "school bag", "handbag", "purse",
-            "laptop", "laptop bag", "computer",
-            "helmet", "motorcycle helmet", "bicycle helmet",
+            # Bags
+            "duffel bag", "duffel", "backpack", "bag",
+            
+            # Electronics
+            "laptop", "computer", "tablet",
+            
+            # Safety
+            "helmet",
+            
+            # Containers
             "bottle", "water bottle",
-            "phone", "mobile phone", "smartphone",
-            "person", "student",
-            "bicycle", "bike", "motorcycle",
-            "car", "vehicle",
-            "book", "notebook", "textbook"
+            
+            # Personal items
+            "file folder", "folder", "umbrella", "coat", "jacket",
+            
+            # Travel
+            "suitcase", "luggage"
         ]
         
         # Load model and processor

@@ -7,10 +7,11 @@ Designed for campus surveillance: focuses on objects and their attributes, not a
 import torch
 from PIL import Image
 import logging
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 from tqdm import tqdm
 import numpy as np
+from difflib import SequenceMatcher
 
 from object_detector import GroundingDINODetector, DetectedObject
 from caption_generator import BlipCaptionGenerator
@@ -42,7 +43,8 @@ class ObjectCaptionPipeline:
                  use_gpu: bool = True,
                  min_object_size: int = 20,
                  max_objects_per_frame: int = 10,
-                 include_scene_caption: bool = False):
+                 include_scene_caption: bool = False,
+                 caption_similarity_threshold: float = 0.85):
         """
         Initialize the object-focused captioning pipeline
         
@@ -53,11 +55,17 @@ class ObjectCaptionPipeline:
             min_object_size: Minimum object size (pixels) to caption
             max_objects_per_frame: Maximum objects to caption per frame
             include_scene_caption: Whether to also generate full scene caption
+            caption_similarity_threshold: Threshold for filtering similar captions (0-1)
         """
         self.use_gpu = use_gpu
         self.min_object_size = min_object_size
         self.max_objects_per_frame = max_objects_per_frame
         self.include_scene_caption = include_scene_caption
+        self.caption_similarity_threshold = caption_similarity_threshold
+        
+        # Track unique captions to prevent duplicates
+        self._seen_captions: Set[str] = set()
+        self._caption_history: List[str] = []
         
         # Initialize or use provided components
         if object_detector is None:
@@ -92,6 +100,12 @@ class ObjectCaptionPipeline:
         self._color_words = set([
             'black','white','gray','grey','red','orange','yellow','green','blue','purple','pink',
             'brown','beige','tan','gold','silver','navy','maroon','teal'
+        ])
+        
+        # Words that indicate person-focused descriptions (to filter out)
+        self._person_indicators = set([
+            'person', 'people', 'man', 'woman', 'student', 'wearing', 'carrying',
+            'holding', 'walking', 'standing', 'sitting', 'running', 'talking'
         ])
         
         logger.info("Object-focused captioning pipeline initialized")
@@ -144,16 +158,24 @@ class ObjectCaptionPipeline:
                     detection.label
                 )
                 
+                # Validate caption quality and uniqueness
                 if caption_text and len(caption_text.split()) >= 3:
-                    obj_caption = ObjectCaption(
-                        frame_data=frame_data,
-                        object_label=detection.label,
-                        object_bbox=detection.bbox,
-                        attribute_caption=caption_text,
-                        confidence=detection.confidence,
-                        is_object_focused=True
-                    )
-                    object_captions.append(obj_caption)
+                    # Check if caption is truly unique
+                    if self._is_unique_caption(caption_text):
+                        obj_caption = ObjectCaption(
+                            frame_data=frame_data,
+                            object_label=detection.label,
+                            object_bbox=detection.bbox,
+                            attribute_caption=caption_text,
+                            confidence=detection.confidence,
+                            is_object_focused=True
+                        )
+                        object_captions.append(obj_caption)
+                        
+                        # Track this caption to prevent future duplicates
+                        self._add_to_caption_history(caption_text)
+                    else:
+                        logger.debug(f"Skipping duplicate caption: '{caption_text}'")
             
             logger.debug(f"Generated {len(object_captions)} object captions for frame {frame_data.frame_id}")
             
@@ -258,30 +280,56 @@ class ObjectCaptionPipeline:
         # Clean caption
         caption = (blip_caption or "").strip()
         
+        # Remove person-focused descriptions
+        # If caption is primarily about a person, reject it
+        caption_lower = caption.lower()
+        person_count = sum(1 for word in self._person_indicators if word in caption_lower)
+        
+        # If too many person-focused words, try to extract just object attributes
+        if person_count > 1:
+            logger.debug(f"Caption too person-focused, extracting object attributes: '{caption}'")
+            # Extract color and attribute words
+            tokens = caption.split()
+            object_tokens = []
+            for token in tokens:
+                token_lower = token.lower().strip('.,!?')
+                # Keep color words, object descriptors, but skip person words
+                if (token_lower in self._color_words or 
+                    token_lower in ['with', 'and', 'a', 'the'] or
+                    len(token_lower) > 4):  # Keep longer descriptive words
+                    if token_lower not in self._person_indicators:
+                        object_tokens.append(token)
+            
+            if object_tokens:
+                caption = ' '.join(object_tokens)
+            else:
+                # If nothing left, just use the object label
+                caption = ""
+        
         # Extract color words from caption
         colors_found = [w for w in self._color_words if w in caption.lower()]
-        
-        # Remove action verbs to focus on attributes
-        action_words = ['walking', 'running', 'sitting', 'standing', 'holding', 'carrying', 'talking', 'wearing']
-        tokens = caption.lower().split()
-        filtered_tokens = [t for t in tokens if t not in action_words]
-        caption = ' '.join(filtered_tokens).strip().capitalize()
         
         # Build object-oriented caption
         obj_type = object_label.title()
         
         if colors_found and caption:
-            # Example: "Backpack: black backpack with straps"
+            # Example: "Black backpack with red straps"
             color_str = colors_found[0]  # Use first detected color
-            if color_str not in caption.lower():
-                caption = f"{color_str} {caption}"
-            formatted = f"{obj_type}: {caption}"
+            # Remove redundant color if already at start
+            caption_words = caption.split()
+            if caption_words and caption_words[0].lower() == color_str:
+                formatted = f"{obj_type}: {caption}"
+            else:
+                formatted = f"{obj_type}: {color_str} {caption}"
         elif caption:
-            # Example: "Person: person in outdoor setting"
+            # Example: "Backpack: backpack with straps"
             formatted = f"{obj_type}: {caption}"
         else:
-            # Fallback: just the object type
+            # Fallback: just the object type (will be filtered out as too short)
             formatted = obj_type
+        
+        # Clean up the formatted caption
+        formatted = formatted.replace('  ', ' ')  # Remove double spaces
         
         # Normalize ending punctuation
         if formatted and formatted[-1] not in '.!?':
@@ -360,6 +408,67 @@ class ObjectCaptionPipeline:
         }
         
         return stats
+    
+    def _is_unique_caption(self, caption: str) -> bool:
+        """
+        Check if caption is unique compared to previously seen captions
+        
+        Args:
+            caption: Caption to check
+            
+        Returns:
+            True if caption is sufficiently unique, False otherwise
+        """
+        caption_normalized = caption.lower().strip()
+        
+        # Check exact match first
+        if caption_normalized in self._seen_captions:
+            return False
+        
+        # Check similarity against recent captions
+        for prev_caption in self._caption_history[-20:]:  # Check last 20 captions
+            similarity = self._caption_similarity(caption_normalized, prev_caption.lower())
+            if similarity >= self.caption_similarity_threshold:
+                logger.debug(f"Caption too similar ({similarity:.2f}): '{caption}' vs '{prev_caption}'")
+                return False
+        
+        return True
+    
+    def _add_to_caption_history(self, caption: str):
+        """
+        Add caption to history for duplicate tracking
+        
+        Args:
+            caption: Caption to add
+        """
+        caption_normalized = caption.lower().strip()
+        self._seen_captions.add(caption_normalized)
+        self._caption_history.append(caption)
+        
+        # Keep history size manageable (last 50 captions)
+        if len(self._caption_history) > 50:
+            # Remove oldest caption from history
+            oldest = self._caption_history.pop(0)
+            # Keep in seen_captions set for exact match checking
+    
+    def _caption_similarity(self, caption1: str, caption2: str) -> float:
+        """
+        Calculate similarity between two captions using sequence matching
+        
+        Args:
+            caption1: First caption
+            caption2: Second caption
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
+        return SequenceMatcher(None, caption1, caption2).ratio()
+    
+    def reset_caption_history(self):
+        """Reset the caption history and seen captions (useful for processing new videos)"""
+        self._seen_captions.clear()
+        self._caption_history.clear()
+        logger.info("Caption history reset")
     
     def clear_cache(self):
         """Clear GPU cache from both models"""
