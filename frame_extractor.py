@@ -25,6 +25,7 @@ class FrameData:
     image: Image.Image
     histogram: Optional[np.ndarray] = None
     phash: Optional[str] = None
+    namespace: str = ""  # For object-based namespace organization
 
 class VideoFrameExtractor:
     """Extract and filter frames from video files"""

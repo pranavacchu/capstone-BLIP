@@ -30,6 +30,7 @@ class ObjectCaption:
     attribute_caption: str  # From BLIP (focused on attributes)
     confidence: float
     is_object_focused: bool = True  # Flag to distinguish from scene captions
+    namespace: str = ""  # Pinecone namespace for this object category
 
 class ObjectCaptionPipeline:
     """
@@ -112,13 +113,15 @@ class ObjectCaptionPipeline:
     
     def process_frame(self,
                      frame_data: FrameData,
-                     object_prompts: Optional[List[str]] = None) -> List[ObjectCaption]:
+                     object_prompts: Optional[List[str]] = None,
+                     verbose: bool = True) -> List[ObjectCaption]:
         """
         Process a single frame: detect objects and caption them
         
         Args:
             frame_data: Frame to process
             object_prompts: Specific objects to detect (uses defaults if None)
+            verbose: Whether to print detailed logging for each caption
             
         Returns:
             List of ObjectCaption instances
@@ -148,7 +151,11 @@ class ObjectCaptionPipeline:
                 return object_captions
             
             # Step 2: Generate attribute-focused captions for each detected object
-            for detection in detections:
+            if verbose:
+                print(f"\n📸 Processing Frame: {frame_data.frame_id} (t={frame_data.timestamp:.2f}s)")
+                print(f"   Found {len(detections)} objects")
+            
+            for idx, detection in enumerate(detections, 1):
                 if detection.cropped_image is None:
                     continue
                 
@@ -159,23 +166,44 @@ class ObjectCaptionPipeline:
                 )
                 
                 # Validate caption quality and uniqueness
-                if caption_text and len(caption_text.split()) >= 3:
+                if caption_text and len(caption_text.split()) >= 4:  # Increased minimum
                     # Check if caption is truly unique
                     if self._is_unique_caption(caption_text):
+                        # Determine namespace for this object category
+                        namespace = self._get_namespace_for_object(detection.label)
+                        
                         obj_caption = ObjectCaption(
                             frame_data=frame_data,
                             object_label=detection.label,
                             object_bbox=detection.bbox,
                             attribute_caption=caption_text,
                             confidence=detection.confidence,
-                            is_object_focused=True
+                            is_object_focused=True,
+                            namespace=namespace
                         )
                         object_captions.append(obj_caption)
                         
                         # Track this caption to prevent future duplicates
                         self._add_to_caption_history(caption_text)
+                        
+                        # Real-time logging
+                        if verbose:
+                            print(f"   ├─ Object {idx}: {detection.label.title()}")
+                            print(f"   │  Caption: {caption_text}")
+                            print(f"   │  Namespace: {namespace}")
+                            print(f"   │  Confidence: {detection.confidence:.2%}")
                     else:
+                        if verbose:
+                            print(f"   ├─ Object {idx}: {detection.label.title()} (skipped - duplicate)")
                         logger.debug(f"Skipping duplicate caption: '{caption_text}'")
+                else:
+                    if verbose:
+                        reason = "failed validation" if caption_text else "no caption generated"
+                        print(f"   ├─ Object {idx}: {detection.label.title()} (skipped - {reason})")
+                    logger.debug(f"Skipping invalid caption: '{caption_text}'")
+            
+            if verbose and object_captions:
+                print(f"   └─ ✓ Generated {len(object_captions)} valid caption(s)")
             
             logger.debug(f"Generated {len(object_captions)} object captions for frame {frame_data.frame_id}")
             
@@ -242,104 +270,114 @@ class ObjectCaptionPipeline:
             Attribute-focused caption string
         """
         try:
-            # Generate caption for the cropped object
+            # Generate caption for the cropped object with conditional text prompt
+            # Use a prompt that encourages complete sentence generation
+            prompt_text = f"a photo of a {object_label}"
+            
             with torch.no_grad():
                 inputs = self.caption_generator.processor(
                     images=cropped_image,
+                    text=prompt_text,
                     return_tensors="pt"
                 )
                 inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
                 outputs = self.caption_generator.model.generate(
                     **inputs,
-                    max_length=30,
-                    num_beams=4,
+                    max_length=40,  # Increased for complete sentences
+                    num_beams=5,    # More beams for better quality
                     do_sample=False,
-                    early_stopping=True
+                    early_stopping=True,
+                    repetition_penalty=1.2,  # Reduce repetitive words
+                    length_penalty=1.0
                 )
                 raw_caption = self.caption_generator.processor.decode(outputs[0], skip_special_tokens=True)
             
             # Clean the raw caption to remove special characters
             raw_caption = self._clean_raw_caption(raw_caption)
             
-            # Format with object label
-            formatted_caption = self._format_attribute_caption(raw_caption, object_label)
+            # Verify object is actually described in caption
+            if not self._verify_object_in_caption(raw_caption, object_label):
+                logger.debug(f"Object '{object_label}' not found in caption: '{raw_caption}'")
+                return None
+            
+            # Format with object label into grammatically correct sentence
+            formatted_caption = self._format_grammatical_caption(raw_caption, object_label)
+            
+            # Validate grammatical correctness
+            if not self._is_grammatically_valid(formatted_caption):
+                logger.debug(f"Caption failed grammar check: '{formatted_caption}'")
+                return None
+            
             return formatted_caption
             
         except Exception as e:
             logger.error(f"Error captioning object {object_label}: {e}")
-            return f"{object_label}"
+            return None
     
     def _format_attribute_caption(self, blip_caption: str, object_label: str) -> str:
         """
-        Format BLIP caption to be attribute-focused
+        DEPRECATED: Use _format_grammatical_caption instead
+        Kept for backward compatibility
+        """
+        return self._format_grammatical_caption(blip_caption, object_label)
+    
+    def _format_grammatical_caption(self, blip_caption: str, object_label: str) -> str:
+        """
+        Format BLIP caption into a grammatically correct, complete sentence
         
         Args:
             blip_caption: Raw caption from BLIP
             object_label: Object label from detector
             
         Returns:
-            Formatted attribute caption
+            Grammatically correct caption
         """
-        # Clean and validate object label first
+        # Clean and validate object label
         object_label = self._clean_object_label(object_label)
         
         # Clean caption
         caption = (blip_caption or "").strip()
         
-        # Remove person-focused descriptions
-        # If caption is primarily about a person, reject it
+        if not caption:
+            return None
+        
+        # Extract object type (normalize label)
+        obj_type = object_label.replace('_', ' ').title()
+        
+        # Check if caption already starts with a determiner
         caption_lower = caption.lower()
-        person_count = sum(1 for word in self._person_indicators if word in caption_lower)
         
-        # If too many person-focused words, try to extract just object attributes
-        if person_count > 1:
-            logger.debug(f"Caption too person-focused, extracting object attributes: '{caption}'")
-            # Extract color and attribute words
-            tokens = caption.split()
-            object_tokens = []
-            for token in tokens:
-                token_lower = token.lower().strip('.,!?')
-                # Keep color words, object descriptors, but skip person words
-                if (token_lower in self._color_words or 
-                    token_lower in ['with', 'and', 'a', 'the'] or
-                    len(token_lower) > 4):  # Keep longer descriptive words
-                    if token_lower not in self._person_indicators:
-                        object_tokens.append(token)
-            
-            if object_tokens:
-                caption = ' '.join(object_tokens)
-            else:
-                # If nothing left, just use the object label
-                caption = ""
+        # Build grammatically correct sentence
+        # Pattern: "{Object}: A/An {color} {object} {description}."
         
-        # Extract color words from caption
-        colors_found = [w for w in self._color_words if w in caption.lower()]
+        # Determine article (a vs an)
+        first_word = caption.split()[0].lower() if caption.split() else ""
+        article = "An" if first_word and first_word[0] in 'aeiou' else "A"
         
-        # Build object-oriented caption
-        obj_type = object_label.title()
+        # Check if caption already contains the object type
+        obj_in_caption = any(word in caption_lower for word in object_label.lower().split())
         
-        if colors_found and caption:
-            # Example: "Black backpack with red straps"
-            color_str = colors_found[0]  # Use first detected color
-            # Remove redundant color if already at start
-            caption_words = caption.split()
-            if caption_words and caption_words[0].lower() == color_str:
-                formatted = f"{obj_type}: {caption}"
-            else:
-                formatted = f"{obj_type}: {color_str} {caption}"
-        elif caption:
-            # Example: "Backpack: backpack with straps"
-            formatted = f"{obj_type}: {caption}"
+        if obj_in_caption:
+            # Caption already mentions the object
+            # Example: "red backpack on a person" -> "Backpack: A red backpack on a person."
+            if caption[0].islower():
+                caption = caption[0].upper() + caption[1:]
+            formatted = f"{obj_type}: {article} {caption}"
         else:
-            # Fallback: just the object type (will be filtered out as too short)
-            formatted = obj_type
+            # Caption doesn't mention object, add it
+            # Example: "red with straps" -> "Backpack: A red backpack with straps."
+            formatted = f"{obj_type}: {article} {caption.lower()}"
         
-        # Clean up the formatted caption
-        formatted = formatted.replace('  ', ' ')  # Remove double spaces
-        
-        # Normalize ending punctuation
+        # Ensure proper ending punctuation
         if formatted and formatted[-1] not in '.!?':
             formatted += '.'
+        
+        # Clean up common grammar issues
+        formatted = formatted.replace('  ', ' ')  # Remove double spaces
+        formatted = formatted.replace(' .', '.')  # Fix space before period
+        formatted = formatted.replace('a a ', 'a ')  # Remove duplicate articles
+        formatted = formatted.replace('A a ', 'A ')
+        formatted = formatted.replace('the the ', 'the ')  # Remove duplicate determiners
         
         return formatted
     
@@ -551,11 +589,210 @@ class ObjectCaptionPipeline:
         """
         return SequenceMatcher(None, caption1, caption2).ratio()
     
+    def _verify_object_in_caption(self, caption: str, object_label: str) -> bool:
+        """
+        Verify that the detected object is actually described in the caption
+        
+        Args:
+            caption: Generated caption text
+            object_label: Expected object label
+            
+        Returns:
+            True if object appears to be described, False otherwise
+        """
+        if not caption or not object_label:
+            return False
+        
+        caption_lower = caption.lower()
+        
+        # Extract key terms from object label
+        label_terms = object_label.lower().replace('_', ' ').split()
+        
+        # Object-related keywords that should appear
+        object_keywords = set(label_terms)
+        
+        # Also accept broader categories
+        category_map = {
+            'backpack': ['backpack', 'bag', 'pack'],
+            'duffel': ['duffel', 'bag', 'duffle'],
+            'bag': ['bag', 'backpack', 'satchel', 'purse'],
+            'laptop': ['laptop', 'computer', 'notebook'],
+            'tablet': ['tablet', 'ipad', 'device'],
+            'helmet': ['helmet', 'hat', 'headgear'],
+            'bottle': ['bottle', 'container', 'flask'],
+            'folder': ['folder', 'file', 'document'],
+            'umbrella': ['umbrella', 'parasol'],
+            'coat': ['coat', 'jacket', 'outerwear'],
+            'jacket': ['jacket', 'coat', 'outerwear'],
+            'suitcase': ['suitcase', 'luggage', 'bag'],
+            'luggage': ['luggage', 'suitcase', 'bag']
+        }
+        
+        # Get acceptable terms for this object
+        acceptable_terms = object_keywords.copy()
+        for term in label_terms:
+            if term in category_map:
+                acceptable_terms.update(category_map[term])
+        
+        # Check if any acceptable term appears in caption
+        for term in acceptable_terms:
+            if term in caption_lower:
+                return True
+        
+        # Additional check: look for visual descriptors that make sense
+        # If caption has reasonable descriptive words, it might still be valid
+        descriptive_words = ['red', 'blue', 'black', 'white', 'green', 'yellow',
+                           'large', 'small', 'leather', 'fabric', 'metal', 'plastic']
+        
+        has_descriptors = any(word in caption_lower for word in descriptive_words)
+        
+        # If no object terms found but has descriptors, likely misidentified
+        if not has_descriptors:
+            logger.debug(f"Caption lacks object reference or descriptors: '{caption}' for '{object_label}'")
+            return False
+        
+        # Last resort: check caption is not about completely different things
+        irrelevant_keywords = ['car', 'vehicle', 'building', 'tree', 'sky', 'rabbit', 
+                              'cat', 'dog', 'bird', 'animal']
+        for keyword in irrelevant_keywords:
+            if keyword in caption_lower and keyword not in object_label.lower():
+                logger.debug(f"Caption describes irrelevant object '{keyword}': '{caption}'")
+                return False
+        
+        return True
+    
+    def _is_grammatically_valid(self, caption: str) -> bool:
+        """
+        Check if caption is grammatically valid and well-formed
+        
+        Args:
+            caption: Caption to validate
+            
+        Returns:
+            True if caption passes basic grammar checks
+        """
+        if not caption:
+            return False
+        
+        # Check minimum length (at least 4 words for a complete sentence)
+        words = caption.split()
+        if len(words) < 4:
+            logger.debug(f"Caption too short: '{caption}'")
+            return False
+        
+        # Check for repetitive articles or words
+        # Example: "a a backpack" or "the the bag"
+        for i in range(len(words) - 1):
+            if words[i].lower() == words[i+1].lower() and words[i].lower() in ['a', 'an', 'the']:
+                logger.debug(f"Repetitive article detected: '{caption}'")
+                return False
+        
+        # Check for incomplete fragments (multiple consecutive single letters)
+        single_letters = [w for w in words if len(w) == 1 and w.lower() not in ['a', 'i']]
+        if len(single_letters) > 2:
+            logger.debug(f"Too many single letter fragments: '{caption}'")
+            return False
+        
+        # Check for proper sentence structure (should have object label prefix)
+        if ':' not in caption:
+            logger.debug(f"Missing object label prefix: '{caption}'")
+            return False
+        
+        # Split by colon and check description part
+        parts = caption.split(':', 1)
+        if len(parts) != 2:
+            return False
+        
+        description = parts[1].strip()
+        desc_words = description.split()
+        
+        # Description should be reasonable length
+        if len(desc_words) < 3:
+            logger.debug(f"Description too short: '{description}'")
+            return False
+        
+        # Check for proper article at start of description
+        first_word = desc_words[0].lower() if desc_words else ""
+        if first_word not in ['a', 'an', 'the']:
+            logger.debug(f"Description missing article: '{description}'")
+            return False
+        
+        # Check for reasonable word diversity (not all same word)
+        unique_words = set(w.lower() for w in desc_words)
+        if len(unique_words) < len(desc_words) * 0.5:  # At least 50% unique
+            logger.debug(f"Low word diversity: '{description}'")
+            return False
+        
+        return True
+    
     def reset_caption_history(self):
         """Reset the caption history and seen captions (useful for processing new videos)"""
         self._seen_captions.clear()
         self._caption_history.clear()
         logger.info("Caption history reset")
+    
+    def _get_namespace_for_object(self, object_label: str) -> str:
+        """
+        Map object label to its Pinecone namespace
+        
+        Args:
+            object_label: Object label from detector
+            
+        Returns:
+            Namespace name (lowercase, underscore-separated)
+        """
+        # Normalize label
+        label_lower = object_label.lower().strip()
+        
+        # Map similar objects to same namespace
+        namespace_mapping = {
+            # Bags
+            'backpack': 'backpack',
+            'bag': 'bag',
+            'duffel bag': 'duffel_bag',
+            'duffel': 'duffel_bag',
+            
+            # Electronics
+            'laptop': 'laptop',
+            'computer': 'laptop',
+            'tablet': 'tablet',
+            
+            # Safety
+            'helmet': 'helmet',
+            
+            # Containers
+            'bottle': 'bottle',
+            'water bottle': 'bottle',
+            
+            # Personal items
+            'folder': 'folder',
+            'file folder': 'folder',
+            'document folder': 'folder',
+            'umbrella': 'umbrella',
+            
+            # Clothing
+            'coat': 'coat_jacket',
+            'jacket': 'coat_jacket',
+            'coat jacket': 'coat_jacket',
+            
+            # Travel
+            'suitcase': 'suitcase_luggage',
+            'luggage': 'suitcase_luggage',
+            'suitcase luggage': 'suitcase_luggage'
+        }
+        
+        # Try exact match first
+        if label_lower in namespace_mapping:
+            return namespace_mapping[label_lower]
+        
+        # Try partial match
+        for key, namespace in namespace_mapping.items():
+            if key in label_lower or label_lower in key:
+                return namespace
+        
+        # Default: use cleaned label as namespace
+        namespace = label_lower.replace(' ', '_').replace('-', '_')
+        return namespace
     
     def clear_cache(self):
         """Clear GPU cache from both models"""

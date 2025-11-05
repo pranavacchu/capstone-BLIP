@@ -161,6 +161,9 @@ class VideoSearchEngine:
             if use_object_detection:
                 # Use object-focused captioning pipeline
                 logger.info("Using object detection + captioning pipeline")
+                print("\n" + "="*80)
+                print("🎯 OBJECT DETECTION + CAPTIONING MODE")
+                print("="*80)
                 
                 if not self.object_pipeline:
                     from object_caption_pipeline import ObjectCaptionPipeline
@@ -175,7 +178,7 @@ class VideoSearchEngine:
                 # Reset caption history for new video
                 self.object_pipeline.reset_caption_history()
                 
-                # Process frames with object detection
+                # Process frames with object detection (with verbose logging)
                 object_captions = self.object_pipeline.process_frames(
                     frames=frames,
                     show_progress=True
@@ -189,6 +192,8 @@ class VideoSearchEngine:
                         caption=oc.attribute_caption,
                         confidence=oc.confidence
                     )
+                    # Store namespace info in frame_data for later use
+                    cf.frame_data.namespace = oc.namespace
                     captioned_frames.append(cf)
                 
                 logger.info(f"Object detection pipeline generated {len(captioned_frames)} captions")
@@ -232,24 +237,61 @@ class VideoSearchEngine:
             actual_uploaded = 0
             if upload_to_pinecone:
                 logger.info("Step 4/4: Uploading to Pinecone...")
+                print("\n" + "="*80)
+                print("☁️  UPLOADING TO PINECONE VECTOR DATABASE")
+                print("="*80)
+                
                 pinecone_data = self.embedding_generator.prepare_for_pinecone(
                     embedded_frames=embedded_frames,
                     video_name=video_name,
                     source_file_path=video_path
                 )
                 
-                actual_uploaded = self.pinecone_manager.upload_embeddings(
-                    data=pinecone_data,
-                    batch_size=self.config.PINECONE_BATCH_SIZE
-                )
+                # Group by namespace if using object detection
+                if use_object_detection:
+                    namespace_groups = {}
+                    for i, (vec_id, vector, metadata) in enumerate(pinecone_data):
+                        # Get namespace from frame_data
+                        ef = embedded_frames[i]
+                        namespace = getattr(ef.captioned_frame.frame_data, 'namespace', '')
+                        
+                        if namespace not in namespace_groups:
+                            namespace_groups[namespace] = []
+                        namespace_groups[namespace].append((vec_id, vector, metadata))
+                    
+                    # Upload each namespace separately with logging
+                    for namespace, data in namespace_groups.items():
+                        print(f"\n📁 Namespace: {namespace}")
+                        print(f"   Uploading {len(data)} vectors...")
+                        
+                        uploaded = self.pinecone_manager.upload_embeddings(
+                            data=data,
+                            batch_size=self.config.PINECONE_BATCH_SIZE,
+                            namespace=namespace
+                        )
+                        actual_uploaded += uploaded
+                        
+                        # Show sample
+                        if data:
+                            sample_caption = data[0][2].get('caption', 'N/A')
+                            print(f"   ✓ Uploaded {uploaded} vectors")
+                            print(f"   Sample caption: {sample_caption[:70]}...")
+                else:
+                    # Upload to default namespace
+                    actual_uploaded = self.pinecone_manager.upload_embeddings(
+                        data=pinecone_data,
+                        batch_size=self.config.PINECONE_BATCH_SIZE
+                    )
                 
                 # Print verification
+                print(f"\n{'='*80}")
                 if actual_uploaded > 0:
+                    print(f"✅ UPLOAD COMPLETE: {actual_uploaded} vectors uploaded for '{video_name}'")
                     sample_ids = [pinecone_data[i][0] for i in range(min(3, len(pinecone_data)))]
-                    logger.info(f"✅ Pinecone upsert confirmed: {actual_uploaded} vectors uploaded for {video_name}")
-                    logger.info(f"   Sample IDs: {', '.join(sample_ids)}...")
+                    print(f"   Sample vector IDs: {', '.join(sample_ids[:3])}...")
                 else:
-                    logger.warning("No vectors were successfully uploaded to Pinecone")
+                    print("❌ WARNING: No vectors were successfully uploaded to Pinecone")
+                print(f"{'='*80}\n")
             
             # Store processed frames
             self.processed_frames = embedded_frames
