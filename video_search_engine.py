@@ -111,6 +111,7 @@ class VideoSearchEngine:
     def process_video(self, 
                      video_path: str,
                      video_name: Optional[str] = None,
+                     video_date: Optional[str] = None,
                      save_frames: bool = False,
                      upload_to_pinecone: bool = True,
                      use_object_detection: bool = False) -> Dict[str, Any]:
@@ -120,6 +121,7 @@ class VideoSearchEngine:
         Args:
             video_path: Path to video file
             video_name: Name for the video (uses filename if None)
+            video_date: Date when video was recorded (YYYY-MM-DD format, uses today if None)
             save_frames: Whether to save extracted frames to disk
             upload_to_pinecone: Whether to upload embeddings to Pinecone
             use_object_detection: Whether to use object detection + captioning pipeline
@@ -137,8 +139,15 @@ class VideoSearchEngine:
         if not video_name:
             video_name = Path(video_path).stem
         
+        # Set video date (use today's date if not provided)
+        if not video_date:
+            from datetime import date
+            video_date = date.today().strftime("%Y-%m-%d")
+            logger.info(f"No video_date provided, using today's date: {video_date}")
+        
         self.current_video = video_name
         logger.info(f"Processing video: {video_name} ({video_path})")
+        logger.info(f"Video date: {video_date}")
         
         # Initialize components
         self._initialize_components()
@@ -148,7 +157,8 @@ class VideoSearchEngine:
             logger.info("Step 1/4: Extracting frames...")
             frames = self.frame_extractor.extract_frames(
                 video_path=video_path,
-                use_similarity_filter=True
+                use_similarity_filter=True,
+                video_date=video_date  # Pass video date to frame extractor
             )
             
             if save_frames:
@@ -253,7 +263,13 @@ class VideoSearchEngine:
                     for i, (vec_id, vector, metadata) in enumerate(pinecone_data):
                         # Get namespace from frame_data
                         ef = embedded_frames[i]
-                        namespace = getattr(ef.captioned_frame.frame_data, 'namespace', '')
+                        object_category = getattr(ef.captioned_frame.frame_data, 'namespace', '')
+                        
+                        # Create date-based namespace: videos:YYYY-MM-DD:category
+                        if object_category:
+                            namespace = f"videos:{video_date}:{object_category}"
+                        else:
+                            namespace = f"videos:{video_date}:general"
                         
                         if namespace not in namespace_groups:
                             namespace_groups[namespace] = []
@@ -380,7 +396,9 @@ class VideoSearchEngine:
               top_k: int = None,
               similarity_threshold: float = None,
               video_filter: Optional[str] = None,
-              time_window: Optional[Tuple[float, float]] = None) -> List[Dict[str, Any]]:
+              time_window: Optional[Tuple[float, float]] = None,
+              date_filter: Optional[str] = None,
+              namespace_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Search for video frames using natural language query
         
@@ -390,6 +408,8 @@ class VideoSearchEngine:
             similarity_threshold: Minimum similarity score
             video_filter: Filter by video name
             time_window: Filter by time range (start, end) in seconds
+            date_filter: Filter by video date (YYYY-MM-DD format)
+            namespace_filter: Filter by specific namespace/category
             
         Returns:
             List of search results with timestamps and metadata
@@ -418,19 +438,86 @@ class VideoSearchEngine:
             )
         
         logger.info(f"Searching for: '{query}'")
+        if date_filter:
+            logger.info(f"Date filter: {date_filter}")
+        if namespace_filter:
+            logger.info(f"Namespace filter: {namespace_filter}")
         
         try:
             # Generate query embedding
             query_embedding = self.embedding_generator.encode_query(query)
             
-            # Search in Pinecone
-            search_results = self.pinecone_manager.semantic_search(
-                query_embedding=query_embedding,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold,
-                video_filter=video_filter,
-                time_window=time_window
-            )
+            # If date_filter is provided, search date-specific namespaces
+            if date_filter and namespace_filter:
+                # Search specific date + category namespace
+                target_namespace = f"videos:{date_filter}:{namespace_filter}"
+                search_results = self.pinecone_manager.query(
+                    query_vector=query_embedding,
+                    top_k=top_k,
+                    namespace=target_namespace,
+                    include_metadata=True
+                )
+            elif date_filter:
+                # Search all categories for this date
+                # Get all namespaces and filter by date prefix
+                stats = self.pinecone_manager.get_index_stats()
+                namespaces = stats.get('namespaces', {})
+                
+                date_namespaces = [ns for ns in namespaces.keys() if ns.startswith(f"videos:{date_filter}:")]
+                
+                if not date_namespaces:
+                    logger.warning(f"No namespaces found for date: {date_filter}")
+                    return []
+                
+                # Query each namespace and combine results
+                all_results = []
+                for ns in date_namespaces:
+                    ns_results = self.pinecone_manager.query(
+                        query_vector=query_embedding,
+                        top_k=top_k,
+                        namespace=ns,
+                        include_metadata=True
+                    )
+                    all_results.extend(ns_results)
+                
+                # Sort by score and take top_k
+                all_results.sort(key=lambda x: x.score, reverse=True)
+                search_results = all_results[:top_k]
+            elif namespace_filter:
+                # Search specific category across all dates
+                # This requires querying multiple date namespaces
+                stats = self.pinecone_manager.get_index_stats()
+                namespaces = stats.get('namespaces', {})
+                
+                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}")]
+                
+                if not category_namespaces:
+                    logger.warning(f"No namespaces found for category: {namespace_filter}")
+                    return []
+                
+                # Query each namespace and combine results
+                all_results = []
+                for ns in category_namespaces:
+                    ns_results = self.pinecone_manager.query(
+                        query_vector=query_embedding,
+                        top_k=top_k,
+                        namespace=ns,
+                        include_metadata=True
+                    )
+                    all_results.extend(ns_results)
+                
+                # Sort by score and take top_k
+                all_results.sort(key=lambda x: x.score, reverse=True)
+                search_results = all_results[:top_k]
+            else:
+                # Search in Pinecone (all namespaces)
+                search_results = self.pinecone_manager.semantic_search(
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                    video_filter=video_filter,
+                    time_window=time_window
+                )
             
             # Format results
             formatted_results = []
@@ -513,6 +600,158 @@ class VideoSearchEngine:
             )
         
         return self.pinecone_manager.get_index_stats()
+    
+    def get_available_dates(self) -> List[str]:
+        """
+        Get list of all dates that have videos in the index
+        
+        Returns:
+            List of dates in YYYY-MM-DD format, sorted
+        """
+        if not self.pinecone_manager:
+            self.pinecone_manager = PineconeManager(
+                api_key=self.config.PINECONE_API_KEY,
+                environment=self.config.PINECONE_ENVIRONMENT,
+                index_name=self.config.PINECONE_INDEX_NAME,
+                dimension=self.config.PINECONE_DIMENSION,
+                metric=self.config.PINECONE_METRIC,
+                host=getattr(self.config, 'PINECONE_HOST', None)
+            )
+        
+        stats = self.pinecone_manager.get_index_stats()
+        namespaces = stats.get('namespaces', {})
+        
+        # Extract unique dates from namespace names
+        dates = set()
+        for ns in namespaces.keys():
+            if ns.startswith('videos:'):
+                parts = ns.split(':')
+                if len(parts) >= 2:
+                    date_part = parts[1]
+                    # Validate date format (YYYY-MM-DD)
+                    if len(date_part) == 10 and date_part[4] == '-' and date_part[7] == '-':
+                        dates.add(date_part)
+        
+        return sorted(list(dates))
+    
+    def search_by_date_range(self,
+                           query: str,
+                           start_date: str,
+                           end_date: str,
+                           top_k: int = None,
+                           similarity_threshold: float = None,
+                           namespace_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Search across a date range
+        
+        Args:
+            query: Natural language search query
+            start_date: Start date (YYYY-MM-DD format)
+            end_date: End date (YYYY-MM-DD format)
+            top_k: Number of results to return
+            similarity_threshold: Minimum similarity score
+            namespace_filter: Filter by specific category
+            
+        Returns:
+            List of search results sorted by score
+        """
+        from datetime import datetime, timedelta
+        
+        top_k = top_k or self.config.QUERY_TOP_K
+        similarity_threshold = similarity_threshold or self.config.QUERY_SIMILARITY_THRESHOLD
+        
+        # Generate date range
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        date_range = []
+        current_dt = start_dt
+        while current_dt <= end_dt:
+            date_range.append(current_dt.strftime("%Y-%m-%d"))
+            current_dt += timedelta(days=1)
+        
+        logger.info(f"Searching across date range: {start_date} to {end_date} ({len(date_range)} days)")
+        
+        # Initialize components
+        if not self.embedding_generator:
+            self.embedding_generator = TextEmbeddingGenerator(
+                model_name=self.config.EMBEDDING_MODEL,
+                batch_size=self.config.EMBEDDING_BATCH_SIZE,
+                use_gpu=self.config.USE_GPU,
+                normalize=True
+            )
+        
+        if not self.pinecone_manager:
+            self.pinecone_manager = PineconeManager(
+                api_key=self.config.PINECONE_API_KEY,
+                environment=self.config.PINECONE_ENVIRONMENT,
+                index_name=self.config.PINECONE_INDEX_NAME,
+                dimension=self.config.PINECONE_DIMENSION,
+                metric=self.config.PINECONE_METRIC,
+                host=getattr(self.config, 'PINECONE_HOST', None)
+            )
+        
+        # Generate query embedding once
+        query_embedding = self.embedding_generator.encode_query(query)
+        
+        # Get all namespaces
+        stats = self.pinecone_manager.get_index_stats()
+        all_namespaces = stats.get('namespaces', {}).keys()
+        
+        # Find relevant namespaces for date range
+        target_namespaces = []
+        for date in date_range:
+            if namespace_filter:
+                # Specific category
+                ns = f"videos:{date}:{namespace_filter}"
+                if ns in all_namespaces:
+                    target_namespaces.append(ns)
+            else:
+                # All categories for this date
+                date_ns = [ns for ns in all_namespaces if ns.startswith(f"videos:{date}:")]
+                target_namespaces.extend(date_ns)
+        
+        if not target_namespaces:
+            logger.warning(f"No namespaces found for date range {start_date} to {end_date}")
+            return []
+        
+        logger.info(f"Searching {len(target_namespaces)} namespaces")
+        
+        # Query each namespace and collect results
+        all_results = []
+        for ns in target_namespaces:
+            ns_results = self.pinecone_manager.query(
+                query_vector=query_embedding,
+                top_k=top_k,
+                namespace=ns,
+                include_metadata=True
+            )
+            all_results.extend(ns_results)
+        
+        # Filter by similarity threshold
+        filtered_results = [r for r in all_results if r.score >= similarity_threshold]
+        
+        # Sort by score and take top_k
+        filtered_results.sort(key=lambda x: x.score, reverse=True)
+        top_results = filtered_results[:top_k]
+        
+        # Format results
+        formatted_results = []
+        for result in top_results:
+            formatted_result = {
+                "timestamp": result.timestamp,
+                "caption": result.caption,
+                "similarity_score": result.score,
+                "frame_id": result.frame_id,
+                "video_name": result.video_name,
+                "video_date": result.metadata.get('video_date', 'unknown'),
+                "time_formatted": self._format_timestamp(result.timestamp)
+            }
+            formatted_results.append(formatted_result)
+        
+        logger.info(f"Found {len(formatted_results)} results across date range")
+        
+        return formatted_results
     
     def clear_index(self) -> bool:
         """Clear all vectors from Pinecone index"""

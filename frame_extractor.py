@@ -26,6 +26,7 @@ class FrameData:
     histogram: Optional[np.ndarray] = None
     phash: Optional[str] = None
     namespace: str = ""  # For object-based namespace organization
+    video_date: str = ""  # Date when video was recorded (YYYY-MM-DD format)
 
 class VideoFrameExtractor:
     """Extract and filter frames from video files"""
@@ -49,10 +50,12 @@ class VideoFrameExtractor:
         self.resize_width = resize_width
         self.min_frames = min_frames
         self.frames_data = []
+        self.video_date = ""  # Store video date for this extraction session
         
     def extract_frames(self, video_path: str, 
                       use_similarity_filter: bool = True,
-                      interval_seconds: Optional[float] = None) -> List[FrameData]:
+                      interval_seconds: Optional[float] = None,
+                      video_date: str = "") -> List[FrameData]:
         """
         Extract frames from video with optional redundancy filtering
         
@@ -60,11 +63,17 @@ class VideoFrameExtractor:
             video_path: Path to video file
             use_similarity_filter: Whether to use similarity-based filtering
             interval_seconds: Extract frame every N seconds (if not using similarity filter)
+            video_date: Date when video was recorded (YYYY-MM-DD format)
             
         Returns:
             List of FrameData objects
         """
+        # Store video date for this session
+        self.video_date = video_date
+        
         logger.info(f"Starting frame extraction from: {video_path}")
+        if video_date:
+            logger.info(f"Video date: {video_date}")
         
         # Open video file
         cap = cv2.VideoCapture(video_path)
@@ -143,7 +152,8 @@ class VideoFrameExtractor:
                 timestamp=timestamp,
                 frame_index=frame_count,
                 image=pil_image,
-                histogram=histogram
+                histogram=histogram,
+                video_date=self.video_date
             )
             
             frames.append(frame_data)
@@ -204,7 +214,8 @@ class VideoFrameExtractor:
                 frame_id=frame_id,
                 timestamp=timestamp,
                 frame_index=frame_count,
-                image=pil_image
+                image=pil_image,
+                video_date=self.video_date
             )
             
             frames.append(frame_data)

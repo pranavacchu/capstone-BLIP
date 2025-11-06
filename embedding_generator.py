@@ -291,8 +291,9 @@ class TextEmbeddingGenerator:
                 'caption': ef.captioned_frame.caption,
                 'frame_id': ef.captioned_frame.frame_data.frame_id,
                 'frame_index': ef.captioned_frame.frame_data.frame_index,
-'video_name': video_name,
-                'source_file_path': source_file_path
+                'video_name': video_name,
+                'source_file_path': source_file_path,
+                'video_date': ef.captioned_frame.frame_data.video_date  # Include video date
             }
             
             pinecone_data.append((unique_id, vector, metadata))
