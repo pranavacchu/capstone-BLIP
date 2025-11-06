@@ -270,14 +270,11 @@ class ObjectCaptionPipeline:
             Attribute-focused caption string
         """
         try:
-            # Generate caption for the cropped object with conditional text prompt
-            # Use a prompt that encourages complete sentence generation
-            prompt_text = f"a photo of a {object_label}"
-            
+            # Generate caption for the cropped object (unconditional generation)
+            # BLIP works better without text prompts for image captioning
             with torch.no_grad():
                 inputs = self.caption_generator.processor(
                     images=cropped_image,
-                    text=prompt_text,
                     return_tensors="pt"
                 )
                 inputs = {k: v.to(self.caption_generator.device) for k, v in inputs.items()}
