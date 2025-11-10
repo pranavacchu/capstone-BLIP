@@ -261,9 +261,8 @@ class VideoSearchEngine:
                 if use_object_detection:
                     namespace_groups = {}
                     for i, (vec_id, vector, metadata) in enumerate(pinecone_data):
-                        # Get namespace from frame_data
-                        ef = embedded_frames[i]
-                        object_category = getattr(ef.captioned_frame.frame_data, 'namespace', '')
+                        # Get namespace from metadata (which we just added in embedding_generator)
+                        object_category = metadata.get('namespace', '')
                         
                         # Create date-based namespace: videos:YYYY-MM-DD:category
                         if object_category:

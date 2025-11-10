@@ -293,7 +293,8 @@ class TextEmbeddingGenerator:
                 'frame_index': ef.captioned_frame.frame_data.frame_index,
                 'video_name': video_name,
                 'source_file_path': source_file_path,
-                'video_date': ef.captioned_frame.frame_data.video_date  # Include video date
+                'video_date': ef.captioned_frame.frame_data.video_date,  # Include video date
+                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', '')  # Include namespace for object detection
             }
             
             pinecone_data.append((unique_id, vector, metadata))
