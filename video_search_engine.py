@@ -489,11 +489,15 @@ class VideoSearchEngine:
                 stats = self.pinecone_manager.get_index_stats()
                 namespaces = stats.get('namespaces', {})
                 
-                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}")]
+                # Support both new format (videos:date:category) and legacy format (category)
+                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}") or ns == namespace_filter]
                 
                 if not category_namespaces:
                     logger.warning(f"No namespaces found for category: {namespace_filter}")
+                    logger.warning(f"Available namespaces: {list(namespaces.keys())}")
                     return []
+                
+                logger.info(f"Searching in namespaces: {category_namespaces}")
                 
                 # Query each namespace and combine results
                 all_results = []
