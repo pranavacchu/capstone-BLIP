@@ -489,15 +489,11 @@ class VideoSearchEngine:
                 stats = self.pinecone_manager.get_index_stats()
                 namespaces = stats.get('namespaces', {})
                 
-                # Support both new format (videos:date:category) and legacy format (category)
-                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}") or ns == namespace_filter]
+                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}")]
                 
                 if not category_namespaces:
                     logger.warning(f"No namespaces found for category: {namespace_filter}")
-                    logger.warning(f"Available namespaces: {list(namespaces.keys())}")
                     return []
-                
-                logger.info(f"Searching in namespaces: {category_namespaces}")
                 
                 # Query each namespace and combine results
                 all_results = []
@@ -514,14 +510,48 @@ class VideoSearchEngine:
                 all_results.sort(key=lambda x: x.score, reverse=True)
                 search_results = all_results[:top_k]
             else:
-                # Search in Pinecone (all namespaces)
-                search_results = self.pinecone_manager.semantic_search(
-                    query_embedding=query_embedding,
-                    top_k=top_k,
-                    similarity_threshold=similarity_threshold,
-                    video_filter=video_filter,
-                    time_window=time_window
-                )
+                # No filters - search across ALL namespaces
+                stats = self.pinecone_manager.get_index_stats()
+                namespaces = stats.get('namespaces', {})
+                
+                if not namespaces:
+                    # No namespaces exist, try default namespace
+                    logger.warning("No namespaces found in index, searching default namespace")
+                    search_results = self.pinecone_manager.semantic_search(
+                        query_embedding=query_embedding,
+                        top_k=top_k,
+                        similarity_threshold=similarity_threshold,
+                        video_filter=video_filter,
+                        time_window=time_window
+                    )
+                else:
+                    # Query each namespace and combine results
+                    logger.info(f"Searching across {len(namespaces)} namespaces")
+                    all_results = []
+                    for ns in namespaces.keys():
+                        ns_results = self.pinecone_manager.query(
+                            query_vector=query_embedding,
+                            top_k=top_k,
+                            namespace=ns,
+                            include_metadata=True
+                        )
+                        all_results.extend(ns_results)
+                    
+                    # Filter by similarity threshold
+                    filtered_results = [r for r in all_results if r.score >= similarity_threshold]
+                    
+                    # Filter by video if specified
+                    if video_filter:
+                        filtered_results = [r for r in filtered_results if r.video_name == video_filter]
+                    
+                    # Filter by time window if specified
+                    if time_window:
+                        start_time, end_time = time_window
+                        filtered_results = [r for r in filtered_results if start_time <= r.timestamp <= end_time]
+                    
+                    # Sort by score and take top_k
+                    filtered_results.sort(key=lambda x: x.score, reverse=True)
+                    search_results = filtered_results[:top_k]
             
             # Format results
             formatted_results = []
