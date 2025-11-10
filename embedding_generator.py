@@ -261,44 +261,37 @@ class TextEmbeddingGenerator:
         
         return embedding_matrix, ids
     
-    def prepare_for_pinecone(self, 
-                           embedded_frames: List[EmbeddedFrame],
-                           video_name: str = "video",
-                           source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
+
+    def prepare_for_pinecone(self, embedded_frames, video_name: str = "", source_file_path: str = "", video_date: str = None):
         """
-        Prepare data for Pinecone upload
-        
-        Args:
-            embedded_frames: List of EmbeddedFrame objects
-            video_name: Name of the video for metadata
-            
-        Returns:
-            List of (id, vector, metadata) tuples for Pinecone
+        Prepare list of (id, vector, metadata) tuples for Pinecone upload.
+        Accepts an optional video_date (YYYY-MM-DD) that will be stored on every vector.
         """
-        pinecone_data = []
-        
+        pinecone_items = []
         for idx, ef in enumerate(embedded_frames):
-            # Create unique ID that includes object index to avoid collisions
-            # Format: frameID_objectIdx_emb
+            # unique id for this embedding
             unique_id = f"{ef.captioned_frame.frame_data.frame_id}_obj{idx}_emb"
-            
-            # Convert embedding to list
-            vector = ef.embedding.tolist()
-            
-            # Prepare metadata
+
+            # ensure embedding is a plain list
+            vector = ef.embedding.tolist() if hasattr(ef.embedding, "tolist") else list(ef.embedding)
+
+            # prefer explicit video_date arg, otherwise fall back to frame_data if present
+            meta_video_date = video_date or getattr(ef.captioned_frame.frame_data, "video_date", None)
+
             metadata = {
-                'timestamp': ef.captioned_frame.frame_data.timestamp,
-                'caption': ef.captioned_frame.caption,
-                'frame_id': ef.captioned_frame.frame_data.frame_id,
-                'frame_index': ef.captioned_frame.frame_data.frame_index,
-                'video_name': video_name,
-                'source_file_path': source_file_path,
-                'video_date': ef.captioned_frame.frame_data.video_date  # Include video date
+                "timestamp": getattr(ef.captioned_frame.frame_data, "timestamp", None),
+                "caption": ef.captioned_frame.caption,
+                "frame_id": getattr(ef.captioned_frame.frame_data, "frame_id", None),
+                "frame_index": getattr(ef.captioned_frame.frame_data, "frame_index", None),
+                "video_name": video_name,
+                "source_file_path": source_file_path,
+                "video_date": meta_video_date,
             }
-            
-            pinecone_data.append((unique_id, vector, metadata))
-        
-        return pinecone_data
+
+            pinecone_items.append((unique_id, vector, metadata))
+
+        return pinecone_items
+
     
     def augment_embeddings(self,
                           embedded_frames: List[EmbeddedFrame],

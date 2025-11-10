@@ -254,7 +254,8 @@ class VideoSearchEngine:
                 pinecone_data = self.embedding_generator.prepare_for_pinecone(
                     embedded_frames=embedded_frames,
                     video_name=video_name,
-                    source_file_path=video_path
+                    source_file_path=video_path,
+                    video_date=video_date  # <-- pass the user-provided date here
                 )
                 
                 # Group by namespace if using object detection
