@@ -140,6 +140,9 @@ class ObjectCaptionPipeline:
             detections = self._filter_detections(detections)
             
             if not detections:
+                if verbose:
+                    print(f"\n📸 Processing Frame: {frame_data.frame_id} (t={frame_data.timestamp:.2f}s)")
+                    print(f"   No objects detected (after filtering)")
                 logger.debug(f"No objects detected in frame {frame_data.frame_id}")
                 
                 # Optionally generate scene caption as fallback
@@ -204,6 +207,8 @@ class ObjectCaptionPipeline:
             
             if verbose and object_captions:
                 print(f"   └─ ✓ Generated {len(object_captions)} valid caption(s)")
+            elif verbose and not object_captions and detections:
+                print(f"   └─ ⚠️  No valid captions generated (all failed validation)")
             
             logger.debug(f"Generated {len(object_captions)} object captions for frame {frame_data.frame_id}")
             
@@ -708,11 +713,17 @@ class ObjectCaptionPipeline:
             logger.debug(f"Description too short: '{description}'")
             return False
         
-        # Check for proper article at start of description
+        # Check for proper article at start of description (relaxed - just a warning)
         first_word = desc_words[0].lower() if desc_words else ""
         if first_word not in ['a', 'an', 'the']:
-            logger.debug(f"Description missing article: '{description}'")
-            return False
+            # Relaxed: Allow captions without articles if they have good content
+            # Check if it has meaningful content words
+            content_words = [w for w in desc_words if len(w) > 3]
+            if len(content_words) < 2:
+                logger.debug(f"Description missing article AND lacks content: '{description}'")
+                return False
+            # Has content, so we'll allow it despite missing article
+            logger.debug(f"Description missing article but has content: '{description}'")
         
         # Check for reasonable word diversity (not all same word)
         unique_words = set(w.lower() for w in desc_words)
