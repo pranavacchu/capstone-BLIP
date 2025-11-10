@@ -168,9 +168,32 @@ async def get_stats():
             raise HTTPException(status_code=500, detail="Engine not initialized")
         
         stats = engine.get_index_stats()
-        return stats
+        
+        # Convert to JSON-serializable format
+        serializable_stats = {
+            "index_name": stats.get("index_name", "N/A"),
+            "total_vectors": stats.get("total_vectors", 0),
+            "dimension": stats.get("dimension", "N/A"),
+            "metric": stats.get("metric", "N/A"),
+            "capacity": stats.get("capacity", "N/A"),
+            "namespaces": {}
+        }
+        
+        # Convert namespace objects to simple dict
+        if "namespaces" in stats and stats["namespaces"]:
+            for namespace, ns_info in stats["namespaces"].items():
+                # Handle NamespaceSummary object - extract vector_count
+                if hasattr(ns_info, 'vector_count'):
+                    serializable_stats["namespaces"][namespace] = ns_info.vector_count
+                elif isinstance(ns_info, int):
+                    serializable_stats["namespaces"][namespace] = ns_info
+                else:
+                    serializable_stats["namespaces"][namespace] = 0
+        
+        return serializable_stats
         
     except Exception as e:
+        print(f"❌ Stats error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
