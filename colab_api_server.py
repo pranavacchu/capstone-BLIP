@@ -562,4 +562,17 @@ if __name__ == "__main__":
     import uvicorn
     print("⚠️ Running in local mode (no ngrok)")
     print("   For Colab, use: start_server_with_ngrok()")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    
+    async def start_server():
+        config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
+    # Get or create event loop
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    loop.run_until_complete(start_server())
