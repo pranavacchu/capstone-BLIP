@@ -297,7 +297,8 @@ class PineconeManager:
                        top_k: int = 10,
                        similarity_threshold: float = 0.6,
                        video_filter: Optional[str] = None,
-                       time_window: Optional[Tuple[float, float]] = None) -> List[SearchResult]:
+                       time_window: Optional[Tuple[float, float]] = None,
+                       video_date: Optional[str] = None) -> List[SearchResult]:
         """
         Perform semantic search with filtering
         
@@ -307,6 +308,7 @@ class PineconeManager:
             similarity_threshold: Minimum similarity score
             video_filter: Filter by video name
             time_window: Filter by time range (start, end) in seconds
+            video_date: Filter by video_date (YYYY-MM-DD)
             
         Returns:
             Filtered list of SearchResult objects
@@ -323,21 +325,20 @@ class PineconeManager:
                 '$lte': time_window[1]
             }
         
-        # Query index
+        if video_date:
+            # exact match on video_date stored in metadata
+            metadata_filter['video_date'] = video_date
+        
+        # Query index (use existing query() wrapper that accepts filter)
         results = self.query(
             query_vector=query_embedding,
-            top_k=top_k * 2,  # Get more results for filtering
-            filter=metadata_filter if metadata_filter else None
+            top_k=top_k,
+            filter=metadata_filter
         )
         
-        # Filter by similarity threshold
-        filtered_results = [r for r in results if r.score >= similarity_threshold]
-        
-        # Remove near-duplicate results
-        filtered_results = self._remove_duplicate_results(filtered_results)
-        
-        # Return top-k results
-        return filtered_results[:top_k]
+        # Filter by similarity threshold locally if needed and return SearchResult list
+        filtered = [r for r in results if r.score >= similarity_threshold]
+        return filtered
     
     def _remove_duplicate_results(self,
                                  results: List[SearchResult],

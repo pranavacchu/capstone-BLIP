@@ -286,6 +286,8 @@ class TextEmbeddingGenerator:
                 "video_name": video_name,
                 "source_file_path": source_file_path,
                 "video_date": meta_video_date,
+                # if object detection: include detected category so upload grouping can use it
+                "object_category": getattr(ef.captioned_frame, "object_category", None) or getattr(ef, "object_category", None)
             }
 
             pinecone_items.append((unique_id, vector, metadata))

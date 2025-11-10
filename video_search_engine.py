@@ -32,6 +32,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+PREDEFINED_NAMESPACES = {
+    "backpack", "bag", "duffel_bag",
+    "laptop", "tablet",
+    "helmet", "bottle", "folder", "umbrella",
+    "coat_jacket", "suitcase_luggage"
+}
+
+# helper to normalise category -> namespace
+def _category_to_namespace(category: str) -> str:
+    if not category:
+        return ""  # default namespace
+    ns = category.lower().replace(" ", "_")
+    return ns if ns in PREDEFINED_NAMESPACES else ""  # fallback to default namespace
+
 class VideoSearchEngine:
     """
     Complete video search engine integrating all components
@@ -251,55 +265,29 @@ class VideoSearchEngine:
                 print("☁️  UPLOADING TO PINECONE VECTOR DATABASE")
                 print("="*80)
                 
-                pinecone_data = self.embedding_generator.prepare_for_pinecone(
-                    embedded_frames=embedded_frames,
-                    video_name=video_name,
-                    source_file_path=video_path,
-                    video_date=video_date  # <-- pass the user-provided date here
-                )
-                
-                # Group by namespace if using object detection
+                # pinecone_items created via self.embedding_generator.prepare_for_pinecone(...)
+                # assume each EmbeddedFrame (ef) contains ef.object_category when object-detection mode used
+
+                # If using object detection, group by category and upload into the predefined namespace.
                 if use_object_detection:
-                    namespace_groups = {}
-                    for i, (vec_id, vector, metadata) in enumerate(pinecone_data):
-                        # Get namespace from frame_data
-                        ef = embedded_frames[i]
-                        object_category = getattr(ef.captioned_frame.frame_data, 'namespace', '')
-                        
-                        # Create date-based namespace: videos:YYYY-MM-DD:category
-                        if object_category:
-                            namespace = f"videos:{video_date}:{object_category}"
-                        else:
-                            namespace = f"videos:{video_date}:general"
-                        
-                        if namespace not in namespace_groups:
-                            namespace_groups[namespace] = []
-                        namespace_groups[namespace].append((vec_id, vector, metadata))
-                    
-                    # Upload each namespace separately with logging
-                    for namespace, data in namespace_groups.items():
-                        print(f"\n📁 Namespace: {namespace}")
-                        print(f"   Uploading {len(data)} vectors...")
-                        
-                        uploaded = self.pinecone_manager.upload_embeddings(
-                            data=data,
-                            batch_size=self.config.PINECONE_BATCH_SIZE,
-                            namespace=namespace
-                        )
-                        actual_uploaded += uploaded
-                        
-                        # Show sample
-                        if data:
-                            sample_caption = data[0][2].get('caption', 'N/A')
-                            print(f"   ✓ Uploaded {uploaded} vectors")
-                            print(f"   Sample caption: {sample_caption[:70]}...")
+                    # group items by category namespace
+                    grouped = {}
+                    for ef_idx, ef in enumerate(embedded_frames):
+                        category = getattr(ef.captioned_frame, "object_category", None) or getattr(ef, "object_category", None) or ef.captioned_frame.caption.split()[0]
+                        namespace = _category_to_namespace(category)
+                        # prepare single-item pinecone tuple (id, vector, metadata)
+                        item = self.embedding_generator._prepare_single_item(ef, video_name=video_name, source_file_path=video_path, video_date=video_date)
+                        grouped.setdefault(namespace, []).append(item)
+
+                    # upsert each group into its namespace (empty string -> default namespace)
+                    for namespace, items in grouped.items():
+                        # use pinecone manager upsert; keep metadata intact (includes 'video_date')
+                        self.pinecone_manager.upsert(items=items, namespace=namespace)
                 else:
-                    # Upload to default namespace
-                    actual_uploaded = self.pinecone_manager.upload_embeddings(
-                        data=pinecone_data,
-                        batch_size=self.config.PINECONE_BATCH_SIZE
-                    )
-                
+                    # non-object-detection: upload all to default namespace (or video_name if you prefer)
+                    items = self.embedding_generator.prepare_for_pinecone(embedded_frames, video_name=video_name, source_file_path=video_path, video_date=video_date)
+                    self.pinecone_manager.upsert(items=items, namespace="")  # default namespace
+
                 # Print verification
                 print(f"\n{'='*80}")
                 if actual_uploaded > 0:
