@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 import numpy as np
 from difflib import SequenceMatcher
+import difflib
 
 from object_detector import GroundingDINODetector, DetectedObject
 from caption_generator import BlipCaptionGenerator
@@ -31,6 +32,24 @@ class ObjectCaption:
     confidence: float
     is_object_focused: bool = True  # Flag to distinguish from scene captions
     namespace: str = ""  # Pinecone namespace for this object category
+
+# Predefined namespaces (only these will ever be used)
+PREDEFINED_NAMESPACES = [
+    "bag",
+    "duffel_bag",
+    "coat_jacket",
+    "laptop",
+    "uncategorized",  # fallback namespace for unmatched captions
+]
+
+# Map namespace -> list of keywords to match quickly
+_NAMESPACE_KEYWORDS = {
+    "bag": ["bag", "handbag", "purse", "satchel"],
+    "duffel_bag": ["duffel", "duffel bag", "gym bag"],
+    "coat_jacket": ["coat", "jacket", "overcoat", "parka"],
+    "laptop": ["laptop", "notebook", "macbook"],
+    "uncategorized": [],
+}
 
 class ObjectCaptionPipeline:
     """
@@ -739,68 +758,32 @@ class ObjectCaptionPipeline:
         self._caption_history.clear()
         logger.info("Caption history reset")
     
-    def _get_namespace_for_object(self, object_label: str) -> str:
+    def _get_namespace_for_object(self, caption_text: str) -> str:
         """
-        Map object label to its Pinecone namespace
-        
-        Args:
-            object_label: Object label from detector
-            
-        Returns:
-            Namespace name (lowercase, underscore-separated)
+        Return one of PREDEFINED_NAMESPACES based on caption_text.
+        Uses keyword matching first, then a fuzzy fallback. Never creates new namespaces.
         """
-        # Normalize label
-        label_lower = object_label.lower().strip()
-        
-        # Map similar objects to same namespace
-        namespace_mapping = {
-            # Bags
-            'backpack': 'backpack',
-            'bag': 'bag',
-            'duffel bag': 'duffel_bag',
-            'duffel': 'duffel_bag',
-            
-            # Electronics
-            'laptop': 'laptop',
-            'computer': 'laptop',
-            'tablet': 'tablet',
-            
-            # Safety
-            'helmet': 'helmet',
-            
-            # Containers
-            'bottle': 'bottle',
-            'water bottle': 'bottle',
-            
-            # Personal items
-            'folder': 'folder',
-            'file folder': 'folder',
-            'document folder': 'folder',
-            'umbrella': 'umbrella',
-            
-            # Clothing
-            'coat': 'coat_jacket',
-            'jacket': 'coat_jacket',
-            'coat jacket': 'coat_jacket',
-            
-            # Travel
-            'suitcase': 'suitcase_luggage',
-            'luggage': 'suitcase_luggage',
-            'suitcase luggage': 'suitcase_luggage'
-        }
-        
-        # Try exact match first
-        if label_lower in namespace_mapping:
-            return namespace_mapping[label_lower]
-        
-        # Try partial match
-        for key, namespace in namespace_mapping.items():
-            if key in label_lower or label_lower in key:
-                return namespace
-        
-        # Default: use cleaned label as namespace
-        namespace = label_lower.replace(' ', '_').replace('-', '_')
-        return namespace
+        if not caption_text:
+            return "uncategorized"
+
+        text = caption_text.lower()
+
+        # quick keyword match
+        for ns, keywords in _NAMESPACE_KEYWORDS.items():
+            for kw in keywords:
+                if kw in text:
+                    return ns
+
+        # fuzzy match against namespace readable names (allowing spaces/underscores)
+        readable_names = [ns.replace("_", " ") for ns in PREDEFINED_NAMESPACES if ns != "uncategorized"]
+        match = difflib.get_close_matches(text, readable_names, n=1, cutoff=0.6)
+        if match:
+            matched_ns = match[0].replace(" ", "_")
+            if matched_ns in PREDEFINED_NAMESPACES:
+                return matched_ns
+
+        # final fallback
+        return "uncategorized"
     
     def clear_cache(self):
         """Clear GPU cache from both models"""
