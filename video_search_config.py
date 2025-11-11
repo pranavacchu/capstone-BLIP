@@ -22,6 +22,10 @@ class Config:
     PINECONE_METRIC = 'cosine'
     PINECONE_CLOUD = 'aws'
     PINECONE_REGION = 'us-east-1'
+    # Optional separate indices for multi-modal storage
+    PINECONE_TEXT_INDEX_NAME = 'test-text'
+    PINECONE_IMAGE_INDEX_NAME = 'test-image'
+    PINECONE_IMAGE_DIMENSION = 512  # Typical CLIP image embedding dim
     
     # Model Configuration
     BLIP_MODEL = 'Salesforce/blip-image-captioning-base'
@@ -45,6 +49,19 @@ class Config:
     BLIP_BATCH_SIZE = 8  # Batch size for BLIP caption generation
     EMBEDDING_BATCH_SIZE = 32  # Batch size for embedding generation
     PINECONE_BATCH_SIZE = 100  # Batch size for Pinecone uploads
+    # Enhanced options
+    ENABLE_DUAL_EMBEDDINGS = True  # Upload caption/image vectors to separate indices
+    ENABLE_TEMPORAL_BOOTSTRAPPING = True  # Compute temporal confidence and smoothing
+    CONFIDENCE_THRESHOLD = 0.5  # Default threshold for filtering search results
+    # Fusion / multi-index search options
+    FUSION_TEXT_WEIGHT = 0.6  # Weight for text/caption index during fusion
+    FUSION_IMAGE_WEIGHT = 0.4  # Weight for image index during fusion
+    CLIP_MODEL_NAME = 'sentence-transformers/clip-vit-base-patch32'  # CLIP model for image embeddings and text->image queries
+    ENABLE_CLIP_DEDUPE = False  # If True, use CLIP-based semantic dedupe instead of histogram-based
+    CLIP_DEDUPE_THRESHOLD = 0.88  # Similarity threshold for CLIP semantic dedupe (0-1)
+    # Thumbnails
+    SAVE_THUMBNAILS = True  # Save small thumbnails for UI and metadata
+    THUMBNAIL_SIZE = (256, 256)  # Size of generated thumbnails (width, height)
     
     # Query Configuration
     QUERY_TOP_K = 10  # Number of results to return

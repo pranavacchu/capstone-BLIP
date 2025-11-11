@@ -20,6 +20,7 @@ from caption_generator import BlipCaptionGenerator, CaptionedFrame
 from embedding_generator import TextEmbeddingGenerator, EmbeddedFrame
 from pinecone_manager import PineconeManager, SearchResult
 from object_caption_pipeline import ObjectCaptionPipeline, ObjectCaption
+from temporal_bootstrapping import TemporalBootstrapper
 
 # Configure logging
 logging.basicConfig(
@@ -158,12 +159,22 @@ class VideoSearchEngine:
             frames = self.frame_extractor.extract_frames(
                 video_path=video_path,
                 use_similarity_filter=True,
+                dedupe_method='clip' if getattr(self.config, 'ENABLE_CLIP_DEDUPE', False) else 'hist',
                 video_date=video_date  # Pass video date to frame extractor
             )
             
             if save_frames:
                 output_dir = os.path.join(self.config.OUTPUT_DIR, video_name, "frames")
                 self.frame_extractor.save_frames_to_disk(output_dir)
+            else:
+                # Optionally save thumbnails even if full frames are not requested
+                try:
+                    if getattr(self.config, 'SAVE_THUMBNAILS', False):
+                        thumb_dir = os.path.join(self.config.TEMP_DIR, video_name, 'frames')
+                        os.makedirs(thumb_dir, exist_ok=True)
+                        self.frame_extractor.save_frames_to_disk(thumb_dir)
+                except Exception:
+                    logger.debug("Thumbnail generation failed; continuing without thumbnails")
             
             # Step 2: Generate captions
             logger.info("Step 2/4: Generating captions...")
@@ -223,9 +234,17 @@ class VideoSearchEngine:
             
             # Step 3: Generate embeddings
             logger.info("Step 3/4: Generating embeddings...")
-            embedded_frames = self.embedding_generator.generate_embeddings(
-                captioned_frames=captioned_frames
-            )
+            # If multimodal embeddings enabled, prefer MultimodalEmbeddingGenerator
+            if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False) and hasattr(self.embedding_generator, 'generate_dual_embeddings'):
+                # Some code paths may already swap in Multimodal generator; otherwise the TextEmbeddingGenerator will be used
+                try:
+                    embedded_frames = self.embedding_generator.generate_dual_embeddings(captioned_frames)
+                except Exception:
+                    embedded_frames = self.embedding_generator.generate_embeddings(captioned_frames)
+            else:
+                embedded_frames = self.embedding_generator.generate_embeddings(
+                    captioned_frames=captioned_frames
+                )
             
             # Step 3.5: Deduplicate embeddings before upload
             logger.info("Deduplicating embeddings...")
@@ -242,8 +261,41 @@ class VideoSearchEngine:
                     similarity_threshold=0.95
                 )
             logger.info(f"After deduplication: {len(embedded_frames)} unique embeddings")
+
+            # Compute temporal confidence scores (optional)
+            if getattr(self.config, 'ENABLE_TEMPORAL_BOOTSTRAPPING', False):
+                try:
+                    tb = TemporalBootstrapper(
+                        temporal_window=5,
+                        confidence_threshold=getattr(self.config, 'CONFIDENCE_THRESHOLD', 0.5),
+                        consistency_weight=0.3,
+                        smoothing_sigma=1.5
+                    )
+
+                    embeddings_array = np.array([ef.embedding for ef in embedded_frames]) if embedded_frames else np.array([])
+                    caption_confidences = [
+                        (ef.captioned_frame.confidence if ef.captioned_frame.confidence is not None else 0.8)
+                        for ef in embedded_frames
+                    ]
+                    frame_ids = [ef.captioned_frame.frame_data.frame_id for ef in embedded_frames]
+
+                    if len(embeddings_array) > 0:
+                        conf_scores = tb.propagate_confidence_scores(
+                            embeddings=embeddings_array,
+                            caption_confidences=caption_confidences,
+                            frame_ids=frame_ids
+                        )
+                        # Annotate embedded_frames with combined confidence
+                        for ef, cs in zip(embedded_frames, conf_scores):
+                            ef.embedding_confidence = cs.combined_score
+
+                        # Store mapping for later use
+                        self.confidence_scores = {ef.captioned_frame.frame_data.frame_id: cs for ef, cs in zip(embedded_frames, conf_scores)}
+                        logger.info("Temporal bootstrapping applied and confidence scores stored on engine")
+                except Exception as e:
+                    logger.warning(f"Temporal bootstrapping failed: {e}")
             
-            # Step 4: Upload to Pinecone
+            # Step 4: Upload to Pinecone (combined + optional caption/image indices)
             actual_uploaded = 0
             if upload_to_pinecone:
                 logger.info("Step 4/4: Uploading to Pinecone...")
@@ -251,11 +303,16 @@ class VideoSearchEngine:
                 print("☁️  UPLOADING TO PINECONE VECTOR DATABASE")
                 print("="*80)
                 
-                pinecone_data = self.embedding_generator.prepare_for_pinecone(
+                pinecone_payload = self.embedding_generator.prepare_for_pinecone(
                     embedded_frames=embedded_frames,
                     video_name=video_name,
                     source_file_path=video_path
                 )
+
+                # Combined vectors (main index)
+                pinecone_data = pinecone_payload.get('combined', [])
+                caption_vectors = pinecone_payload.get('caption', [])
+                image_vectors = pinecone_payload.get('image', [])
                 
                 # Group by namespace if using object detection
                 if use_object_detection:
@@ -292,11 +349,39 @@ class VideoSearchEngine:
                             print(f"   ✓ Uploaded {uploaded} vectors")
                             print(f"   Sample caption: {sample_caption[:70]}...")
                 else:
-                    # Upload to default namespace
+                    # Upload to default namespace (combined/main index)
                     actual_uploaded = self.pinecone_manager.upload_embeddings(
                         data=pinecone_data,
                         batch_size=self.config.PINECONE_BATCH_SIZE
                     )
+
+                # If dual embeddings are enabled, upload caption and image embeddings to separate indices
+                try:
+                    enable_dual = getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False)
+                except Exception:
+                    enable_dual = False
+
+                if enable_dual and caption_vectors:
+                    text_index = getattr(self.config, 'PINECONE_TEXT_INDEX_NAME', self.config.PINECONE_INDEX_NAME)
+                    text_dim = getattr(self.config, 'PINECONE_DIMENSION', self.config.PINECONE_DIMENSION)
+                    uploaded_text = self.pinecone_manager.upload_embeddings_to_index(
+                        index_name=text_index,
+                        dimension=text_dim,
+                        data=caption_vectors,
+                        batch_size=self.config.PINECONE_BATCH_SIZE
+                    )
+                    logger.info(f"Uploaded {uploaded_text} caption vectors to index '{text_index}'")
+
+                if enable_dual and image_vectors:
+                    image_index = getattr(self.config, 'PINECONE_IMAGE_INDEX_NAME', None) or self.config.PINECONE_IMAGE_INDEX_NAME
+                    image_dim = getattr(self.config, 'PINECONE_IMAGE_DIMENSION', self.config.PINECONE_IMAGE_DIMENSION)
+                    uploaded_image = self.pinecone_manager.upload_embeddings_to_index(
+                        index_name=image_index,
+                        dimension=image_dim,
+                        data=image_vectors,
+                        batch_size=self.config.PINECONE_BATCH_SIZE
+                    )
+                    logger.info(f"Uploaded {uploaded_image} image vectors to index '{image_index}'")
                 
                 # Print verification
                 print(f"\n{'='*80}")
@@ -443,8 +528,17 @@ class VideoSearchEngine:
             logger.info(f"Namespace filter: {namespace_filter}")
         
         try:
-            # Generate query embedding
+            # Generate query embedding(s)
             query_embedding = self.embedding_generator.encode_query(query)
+            # If dual embeddings enabled, also encode a CLIP text embedding for image index queries
+            clip_query_embedding = None
+            if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False):
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    clip_model = SentenceTransformer(getattr(self.config, 'CLIP_MODEL_NAME', 'sentence-transformers/clip-vit-base-patch32'))
+                    clip_query_embedding = clip_model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
+                except Exception as e:
+                    logger.warning(f"Failed to load CLIP model for image-index query: {e}")
             
             # If date_filter is provided, search date-specific namespaces
             if date_filter and namespace_filter:
@@ -516,13 +610,90 @@ class VideoSearchEngine:
                 if not namespaces:
                     # No namespaces exist, try default namespace
                     logger.warning("No namespaces found in index, searching default namespace")
-                    search_results = self.pinecone_manager.semantic_search(
-                        query_embedding=query_embedding,
-                        top_k=top_k,
-                        similarity_threshold=similarity_threshold,
-                        video_filter=video_filter,
-                        time_window=time_window
-                    )
+                    # If dual indices are enabled, perform fusion search
+                    if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False) and clip_query_embedding is not None:
+                        # Query text index
+                        text_index = getattr(self.config, 'PINECONE_TEXT_INDEX_NAME', self.config.PINECONE_INDEX_NAME)
+                        image_index = getattr(self.config, 'PINECONE_IMAGE_INDEX_NAME', None) or self.config.PINECONE_IMAGE_INDEX_NAME
+
+                        text_results = self.pinecone_manager.query_index(
+                            index_name=text_index,
+                            query_vector=query_embedding,
+                            top_k=top_k,
+                            include_metadata=True
+                        )
+
+                        image_results = self.pinecone_manager.query_index(
+                            index_name=image_index,
+                            query_vector=clip_query_embedding,
+                            top_k=top_k,
+                            include_metadata=True
+                        )
+
+                        # Normalize scores per list (min-max)
+                        def normalize_list(res_list):
+                            if not res_list:
+                                return {}
+                            scores = [r.score for r in res_list]
+                            min_s, max_s = min(scores), max(scores)
+                            norm = {}
+                            for r in res_list:
+                                if max_s - min_s <= 1e-6:
+                                    norm_score = 1.0
+                                else:
+                                    norm_score = (r.score - min_s) / (max_s - min_s)
+                                norm[r.metadata.get('parent_combined_id', r.id)] = norm_score
+                            return norm
+
+                        text_norm = normalize_list(text_results)
+                        image_norm = normalize_list(image_results)
+
+                        # Fuse by parent_combined_id (preferred) otherwise by id
+                        fused = {}
+                        text_w = getattr(self.config, 'FUSION_TEXT_WEIGHT', 0.6)
+                        image_w = getattr(self.config, 'FUSION_IMAGE_WEIGHT', 0.4)
+
+                        # Collect all keys
+                        keys = set(list(text_norm.keys()) + list(image_norm.keys()))
+                        for k in keys:
+                            t = text_norm.get(k, 0.0)
+                            im = image_norm.get(k, 0.0)
+                            score = text_w * t + image_w * im
+                            fused[k] = score
+
+                        # Convert fused dict to list of tuples sorted
+                        fused_items = sorted(fused.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+                        # Build formatted results, retrieving metadata from either text_results or image_results
+                        id_to_result = {r.metadata.get('parent_combined_id', r.id): r for r in (text_results + image_results)}
+                        final_results = []
+                        for combined_id, fused_score in fused_items:
+                            r = id_to_result.get(combined_id)
+                            if not r:
+                                continue
+                            # Apply confidence weighting if present
+                            combined_conf = r.metadata.get('combined_confidence') or r.metadata.get('combined_confidence', None)
+                            if combined_conf is None:
+                                combined_conf = 1.0
+                            # Apply threshold filtering
+                            if combined_conf < getattr(self.config, 'CONFIDENCE_THRESHOLD', 0.5):
+                                # Skip low confidence
+                                continue
+                            final_results.append((r, fused_score * float(combined_conf)))
+
+                        # Format for return
+                        search_results = []
+                        for r, score in final_results:
+                            search_results.append(r)
+
+                    else:
+                        search_results = self.pinecone_manager.semantic_search(
+                            query_embedding=query_embedding,
+                            top_k=top_k,
+                            similarity_threshold=similarity_threshold,
+                            video_filter=video_filter,
+                            time_window=time_window
+                        )
                 else:
                     # Query each namespace and combine results
                     logger.info(f"Searching across {len(namespaces)} namespaces")

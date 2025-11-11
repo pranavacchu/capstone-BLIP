@@ -23,34 +23,60 @@ class CaptionedFrame:
     frame_data: FrameData
     caption: str
     confidence: Optional[float] = None
+    caption_variants: Optional[List[str]] = None  # Alternative captions for robustness
+    model_type: Optional[str] = None  # Model used for captioning
 
 class BlipCaptionGenerator:
     """Generate captions for frames using BLIP model"""
     
+    # Efficient model variants
+    EFFICIENT_MODELS = {
+        "base": "Salesforce/blip-image-captioning-base",  # Standard BLIP
+        "large": "Salesforce/blip-image-captioning-large",  # Larger, more accurate but slower
+        "tiny": "Salesforce/blip-image-captioning-tiny",  # Lightweight for mobile/edge
+        "object-focused": "Salesforce/blip-image-captioning-large",  # Optimized for objects (uses large model)
+    }
+    
     def __init__(self, 
                  model_name: str = "Salesforce/blip-image-captioning-base",
+                 model_type: str = "base",
                  batch_size: int = 8,
                  use_gpu: bool = True,
                  max_length: int = 50,
                  num_beams: int = 4,
                  generate_multiple_captions: bool = False,
-                 captions_per_frame: int = 3):
+                 captions_per_frame: int = 3,
+                 compute_confidence: bool = True,
+                 diversity_penalty: float = 0.5):
         """
         Initialize the BLIP caption generator
         
         Args:
-            model_name: Hugging Face model identifier
+            model_name: Hugging Face model identifier or preset ('base', 'large', 'tiny', 'object-focused')
+            model_type: Type of model preset
             batch_size: Batch size for processing
             use_gpu: Whether to use GPU if available
             max_length: Maximum caption length
             num_beams: Number of beams for beam search
+            generate_multiple_captions: Whether to generate multiple caption variants
+            captions_per_frame: Number of caption variants per frame
+            compute_confidence: Whether to compute confidence scores for captions
+            diversity_penalty: Penalty for duplicate n-grams in beam search (for diversity)
         """
-        self.model_name = model_name
+        # Handle preset model names
+        if model_type in self.EFFICIENT_MODELS and model_name == "Salesforce/blip-image-captioning-base":
+            self.model_name = self.EFFICIENT_MODELS[model_type]
+        else:
+            self.model_name = model_name
+        
+        self.model_type = model_type
         self.batch_size = batch_size
         self.max_length = max_length
         self.num_beams = num_beams
         self.generate_multiple_captions = generate_multiple_captions
         self.captions_per_frame = captions_per_frame
+        self.compute_confidence = compute_confidence
+        self.diversity_penalty = diversity_penalty
         
         # Object-focused prompts for diverse, detailed captions
         self.object_prompts = [

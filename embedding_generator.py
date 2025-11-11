@@ -23,6 +23,11 @@ class EmbeddedFrame:
     captioned_frame: CaptionedFrame
     embedding: np.ndarray
     embedding_id: str
+    image_embedding: Optional[np.ndarray] = None  # Image visual embedding
+    image_embedding_id: Optional[str] = None  # ID for image embedding
+    caption_embedding: Optional[np.ndarray] = None  # Caption text embedding
+    caption_embedding_id: Optional[str] = None  # ID for caption embedding
+    embedding_confidence: Optional[float] = None  # Quality confidence for embedding
 
 class TextEmbeddingGenerator:
     """Generate embeddings for text using sentence-transformers"""
@@ -275,31 +280,78 @@ class TextEmbeddingGenerator:
         Returns:
             List of (id, vector, metadata) tuples for Pinecone
         """
-        pinecone_data = []
-        
+        """
+        Prepare multi-index data for Pinecone upload.
+
+        Returns a dict with keys: 'combined', 'caption', 'image' each mapping to
+        a list of (id, vector, metadata) tuples.
+        """
+        combined_data = []
+        caption_data = []
+        image_data = []
+
+        # Basic color list for lightweight attribute extraction
+        color_words = set(['black','white','gray','grey','red','orange','yellow','green','blue','purple','pink','brown','beige','tan','gold','silver','navy','maroon','teal'])
+
         for idx, ef in enumerate(embedded_frames):
-            # Create unique ID that includes object index to avoid collisions
-            # Format: frameID_objectIdx_emb
-            unique_id = f"{ef.captioned_frame.frame_data.frame_id}_obj{idx}_emb"
-            
-            # Convert embedding to list
-            vector = ef.embedding.tolist()
-            
-            # Prepare metadata
+            frame_id = ef.captioned_frame.frame_data.frame_id
+            timestamp = ef.captioned_frame.frame_data.timestamp
+
+            # IDs
+            combined_id = f"{frame_id}_obj{idx}_combined"
+            caption_id = f"{frame_id}_obj{idx}_caption"
+            image_id = f"{frame_id}_obj{idx}_image"
+
+            # Combined vector (the main vector used for primary index)
+            combined_vector = ef.embedding.tolist()
+
+            # Caption and image vectors (if available)
+            caption_vector = ef.caption_embedding.tolist() if ef.caption_embedding is not None else None
+            image_vector = ef.image_embedding.tolist() if ef.image_embedding is not None else None
+
+            # Extract simple structured attributes (colors/nouns) from caption text
+            caption_text = ef.captioned_frame.caption or ''
+            caption_lower = caption_text.lower()
+            found_colors = [c for c in color_words if c in caption_lower]
+
             metadata = {
-                'timestamp': ef.captioned_frame.frame_data.timestamp,
-                'caption': ef.captioned_frame.caption,
-                'frame_id': ef.captioned_frame.frame_data.frame_id,
+                'timestamp': timestamp,
+                'caption': caption_text,
+                'frame_id': frame_id,
                 'frame_index': ef.captioned_frame.frame_data.frame_index,
                 'video_name': video_name,
                 'source_file_path': source_file_path,
-                'video_date': ef.captioned_frame.frame_data.video_date,  # Include video date
-                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', '')  # Include namespace for object detection
+                'video_date': ef.captioned_frame.frame_data.video_date,
+                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', ''),
+                'object_label': getattr(ef.captioned_frame.frame_data, 'object_label', ''),
+                'colors': found_colors,
+                # Embedding ids for traceability
+                'caption_embedding_id': caption_id,
+                'image_embedding_id': image_id,
+                'combined_confidence': float(ef.embedding_confidence) if ef.embedding_confidence is not None else None,
+                'thumbnail_path': getattr(ef.captioned_frame.frame_data, 'thumbnail_path', None)
             }
-            
-            pinecone_data.append((unique_id, vector, metadata))
-        
-        return pinecone_data
+
+            # Append combined
+            combined_data.append((combined_id, combined_vector, metadata))
+
+            # Caption index entry
+            if caption_vector is not None:
+                caption_meta = metadata.copy()
+                caption_meta.update({'parent_combined_id': combined_id, 'modality': 'caption'})
+                caption_data.append((caption_id, caption_vector, caption_meta))
+
+            # Image index entry
+            if image_vector is not None:
+                image_meta = metadata.copy()
+                image_meta.update({'parent_combined_id': combined_id, 'modality': 'image'})
+                image_data.append((image_id, image_vector, image_meta))
+
+        return {
+            'combined': combined_data,
+            'caption': caption_data,
+            'image': image_data
+        }
     
     def augment_embeddings(self,
                           embedded_frames: List[EmbeddedFrame],
@@ -425,6 +477,203 @@ class TextEmbeddingGenerator:
         del self.model
         self.clear_cache()
         logger.info("Embedding model unloaded")
+
+
+class MultimodalEmbeddingGenerator:
+    """
+    Generate both image and caption embeddings for improved multimodal search
+    Stores caption embeddings and image embeddings separately for flexible retrieval
+    """
+    
+    def __init__(self,
+                 caption_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+                 image_model: str = "sentence-transformers/clip-vit-base-patch32",
+                 batch_size: int = 32,
+                 use_gpu: bool = True,
+                 normalize: bool = True,
+                 embedding_weights: Dict[str, float] = None):
+        """
+        Initialize multimodal embedding generator
+        
+        Args:
+            caption_model: Model for text embeddings
+            image_model: Model for image embeddings (CLIP-based)
+            batch_size: Batch size for encoding
+            use_gpu: Whether to use GPU
+            normalize: Whether to normalize embeddings
+            embedding_weights: Weights for combining caption and image embeddings
+                               {'caption': 0.6, 'image': 0.4} by default
+        """
+        self.batch_size = batch_size
+        self.normalize = normalize
+        self.device = 'cuda' if torch.cuda.is_available() and use_gpu else 'cpu'
+        
+        # Default weights
+        if embedding_weights is None:
+            embedding_weights = {'caption': 0.6, 'image': 0.4}
+        self.embedding_weights = embedding_weights
+        
+        logger.info(f"Initializing multimodal embeddings on {self.device}")
+        logger.info(f"Embedding weights - Caption: {embedding_weights['caption']}, "
+                   f"Image: {embedding_weights['image']}")
+        
+        # Load caption model
+        logger.info(f"Loading caption model: {caption_model}")
+        self.caption_model = SentenceTransformer(caption_model, device=self.device)
+        self.caption_model.eval()
+        
+        # Load image model
+        logger.info(f"Loading image model: {image_model}")
+        self.image_model = SentenceTransformer(image_model, device=self.device)
+        self.image_model.eval()
+        
+        self.caption_dim = self.caption_model.get_sentence_embedding_dimension()
+        self.image_dim = self.image_model.get_sentence_embedding_dimension()
+        
+        logger.info(f"Caption embedding dimension: {self.caption_dim}")
+        logger.info(f"Image embedding dimension: {self.image_dim}")
+    
+    def generate_dual_embeddings(self,
+                                captioned_frames: List[CaptionedFrame],
+                                show_progress: bool = True) -> List[EmbeddedFrame]:
+        """
+        Generate both caption and image embeddings for all frames
+        
+        Args:
+            captioned_frames: List of CaptionedFrame objects
+            show_progress: Whether to show progress
+            
+        Returns:
+            List of EmbeddedFrame objects with dual embeddings
+        """
+        if not captioned_frames:
+            return []
+        
+        logger.info(f"Generating dual embeddings for {len(captioned_frames)} frames")
+        
+        embedded_frames = []
+        
+        for cf in tqdm(captioned_frames, desc="Dual embedding generation", 
+                       disable=not show_progress):
+            # Generate caption embedding
+            caption_embedding = self.caption_model.encode(
+                cf.caption,
+                convert_to_numpy=True,
+                normalize_embeddings=self.normalize
+            )
+            
+            # Generate image embedding
+            image_embedding = self.image_model.encode(
+                cf.frame_data.image,
+                convert_to_numpy=True,
+                normalize_embeddings=self.normalize
+            )
+            
+            # Combine embeddings with weights
+            combined_embedding = self._combine_embeddings(
+                caption_embedding,
+                image_embedding
+            )
+            
+            # Confidence: how well aligned are caption and image embeddings?
+            alignment_confidence = float(np.dot(caption_embedding, image_embedding))
+            
+            embedded_frame = EmbeddedFrame(
+                captioned_frame=cf,
+                embedding=combined_embedding,
+                embedding_id=f"{cf.frame_data.frame_id}_combined",
+                caption_embedding=caption_embedding,
+                caption_embedding_id=f"{cf.frame_data.frame_id}_caption",
+                image_embedding=image_embedding,
+                image_embedding_id=f"{cf.frame_data.frame_id}_image",
+                embedding_confidence=alignment_confidence
+            )
+            embedded_frames.append(embedded_frame)
+        
+        logger.info(f"Generated {len(embedded_frames)} dual embeddings")
+        return embedded_frames
+    
+    def _combine_embeddings(self,
+                           caption_emb: np.ndarray,
+                           image_emb: np.ndarray) -> np.ndarray:
+        """
+        Combine caption and image embeddings with weights
+        
+        Args:
+            caption_emb: Caption embedding
+            image_emb: Image embedding
+            
+        Returns:
+            Combined embedding
+        """
+        # Ensure same dimension by using caption dimension as base
+        if caption_emb.shape[0] != image_emb.shape[0]:
+            # Project to common dimension (use smaller dimension)
+            target_dim = min(caption_emb.shape[0], image_emb.shape[0])
+            caption_emb = caption_emb[:target_dim]
+            image_emb = image_emb[:target_dim]
+        
+        # Weighted combination
+        combined = (self.embedding_weights['caption'] * caption_emb +
+                   self.embedding_weights['image'] * image_emb)
+        
+        # Normalize combined embedding
+        if self.normalize:
+            norm = np.linalg.norm(combined)
+            if norm > 0:
+                combined = combined / norm
+        
+        return combined
+    
+    def encode_query_multimodal(self,
+                               text_query: str,
+                               image_query: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        Encode a query using multimodal approach
+        
+        Args:
+            text_query: Text query string
+            image_query: Optional image query (numpy array)
+            
+        Returns:
+            Combined query embedding
+        """
+        # Encode text
+        text_embedding = self.caption_model.encode(
+            text_query,
+            convert_to_numpy=True,
+            normalize_embeddings=self.normalize
+        )
+        
+        if image_query is not None:
+            # Encode image
+            image_embedding = self.image_model.encode(
+                image_query,
+                convert_to_numpy=True,
+                normalize_embeddings=self.normalize
+            )
+            
+            # Combine
+            combined = self._combine_embeddings(text_embedding, image_embedding)
+        else:
+            # Only text query
+            combined = text_embedding
+        
+        return combined
+    
+    def clear_cache(self):
+        """Clear GPU cache"""
+        gc.collect()
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+        logger.info("Cache cleared")
+    
+    def unload_models(self):
+        """Unload models from memory"""
+        del self.caption_model
+        del self.image_model
+        self.clear_cache()
+        logger.info("Multimodal models unloaded")
 
 
 # Example usage and testing
