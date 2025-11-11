@@ -432,111 +432,75 @@ class VideoSearchEngine:
             # Generate query embedding
             query_embedding = self.embedding_generator.encode_query(query)
             
-            # If date_filter is provided, search date-specific namespaces
-            if date_filter and namespace_filter:
-                # Search specific date + category namespace
-                target_namespace = f"videos:{date_filter}:{namespace_filter}"
-                search_results = self.pinecone_manager.query(
+            # Get available namespaces from index stats (flat namespaces)
+            stats = self.pinecone_manager.get_index_stats()
+            available_namespaces = list(stats.get('namespaces', {}).keys())
+            
+            def _canon(s: str) -> str:
+                return (s or '').lower().replace(' ', '_')
+            
+            def _resolve_namespaces(ns_filter: Optional[str], q: Optional[str]) -> List[str]:
+                # Try to resolve explicit filter first
+                if ns_filter:
+                    target = _canon(ns_filter)
+                    synonyms = {
+                        'bag': {'bag', 'backpack', 'bagpack', 'duffel_bag', 'duffel'},
+                        'backpack': {'backpack', 'bag', 'bagpack'},
+                        'bagpack': {'bagpack', 'backpack', 'bag'},
+                        'duffel': {'duffel_bag', 'duffel'},
+                        'duffel_bag': {'duffel_bag', 'duffel'},
+                        'laptop': {'laptop'}
+                    }
+                    candidates = synonyms.get(target, {target})
+                    # Match against available namespaces (canonicalized)
+                    avail_canon = {_canon(ns): ns for ns in available_namespaces}
+                    resolved = [avail_canon[c] for c in candidates if c in avail_canon]
+                    return resolved or available_namespaces  # fallback: search all if none matched
+                
+                # Infer from query text if possible
+                t = (q or '').lower()
+                inferred = set()
+                if any(k in t for k in ['bag', 'backpack', 'bagpack', 'duffel', 'duffle']):
+                    inferred.update(['bag', 'backpack', 'bagpack', 'duffel_bag'])
+                if any(k in t for k in ['laptop', 'notebook', 'macbook', 'chromebook']):
+                    inferred.add('laptop')
+                # Map inferred to available
+                avail_canon = {_canon(ns): ns for ns in available_namespaces}
+                resolved = [avail_canon[c] for c in inferred if c in avail_canon]
+                return resolved or available_namespaces
+            
+            target_namespaces = _resolve_namespaces(namespace_filter, query)
+            
+            # Query each target namespace and combine results
+            all_results = []
+            for ns in (target_namespaces or [""]):
+                ns_results = self.pinecone_manager.query(
                     query_vector=query_embedding,
                     top_k=top_k,
-                    namespace=target_namespace,
+                    namespace=ns,
                     include_metadata=True
                 )
-            elif date_filter:
-                # Search all categories for this date
-                # Get all namespaces and filter by date prefix
-                stats = self.pinecone_manager.get_index_stats()
-                namespaces = stats.get('namespaces', {})
-                
-                date_namespaces = [ns for ns in namespaces.keys() if ns.startswith(f"videos:{date_filter}:")]
-                
-                if not date_namespaces:
-                    logger.warning(f"No namespaces found for date: {date_filter}")
-                    return []
-                
-                # Query each namespace and combine results
-                all_results = []
-                for ns in date_namespaces:
-                    ns_results = self.pinecone_manager.query(
-                        query_vector=query_embedding,
-                        top_k=top_k,
-                        namespace=ns,
-                        include_metadata=True
-                    )
-                    all_results.extend(ns_results)
-                
-                # Sort by score and take top_k
-                all_results.sort(key=lambda x: x.score, reverse=True)
-                search_results = all_results[:top_k]
-            elif namespace_filter:
-                # Search specific category across all dates
-                # This requires querying multiple date namespaces
-                stats = self.pinecone_manager.get_index_stats()
-                namespaces = stats.get('namespaces', {})
-                
-                category_namespaces = [ns for ns in namespaces.keys() if ns.endswith(f":{namespace_filter}")]
-                
-                if not category_namespaces:
-                    logger.warning(f"No namespaces found for category: {namespace_filter}")
-                    return []
-                
-                # Query each namespace and combine results
-                all_results = []
-                for ns in category_namespaces:
-                    ns_results = self.pinecone_manager.query(
-                        query_vector=query_embedding,
-                        top_k=top_k,
-                        namespace=ns,
-                        include_metadata=True
-                    )
-                    all_results.extend(ns_results)
-                
-                # Sort by score and take top_k
-                all_results.sort(key=lambda x: x.score, reverse=True)
-                search_results = all_results[:top_k]
-            else:
-                # No filters - search across ALL namespaces
-                stats = self.pinecone_manager.get_index_stats()
-                namespaces = stats.get('namespaces', {})
-                
-                if not namespaces:
-                    # No namespaces exist, try default namespace
-                    logger.warning("No namespaces found in index, searching default namespace")
-                    search_results = self.pinecone_manager.semantic_search(
-                        query_embedding=query_embedding,
-                        top_k=top_k,
-                        similarity_threshold=similarity_threshold,
-                        video_filter=video_filter,
-                        time_window=time_window
-                    )
-                else:
-                    # Query each namespace and combine results
-                    logger.info(f"Searching across {len(namespaces)} namespaces")
-                    all_results = []
-                    for ns in namespaces.keys():
-                        ns_results = self.pinecone_manager.query(
-                            query_vector=query_embedding,
-                            top_k=top_k,
-                            namespace=ns,
-                            include_metadata=True
-                        )
-                        all_results.extend(ns_results)
-                    
-                    # Filter by similarity threshold
-                    filtered_results = [r for r in all_results if r.score >= similarity_threshold]
-                    
-                    # Filter by video if specified
-                    if video_filter:
-                        filtered_results = [r for r in filtered_results if r.video_name == video_filter]
-                    
-                    # Filter by time window if specified
-                    if time_window:
-                        start_time, end_time = time_window
-                        filtered_results = [r for r in filtered_results if start_time <= r.timestamp <= end_time]
-                    
-                    # Sort by score and take top_k
-                    filtered_results.sort(key=lambda x: x.score, reverse=True)
-                    search_results = filtered_results[:top_k]
+                all_results.extend(ns_results)
+            
+            # Filter by similarity threshold
+            filtered_results = [r for r in all_results if r.score >= similarity_threshold]
+            
+            # Filter by video if specified
+            if video_filter:
+                filtered_results = [r for r in filtered_results if r.video_name == video_filter]
+            
+            # Date filter now uses metadata rather than namespace naming
+            if date_filter:
+                filtered_results = [r for r in filtered_results if r.metadata.get('video_date') == date_filter]
+            
+            # Filter by time window if specified
+            if time_window:
+                start_time, end_time = time_window
+                filtered_results = [r for r in filtered_results if start_time <= r.timestamp <= end_time]
+            
+            # Sort by score and take top_k
+            filtered_results.sort(key=lambda x: x.score, reverse=True)
+            search_results = filtered_results[:top_k]
             
             # Format results
             formatted_results = []
@@ -713,25 +677,32 @@ class VideoSearchEngine:
         # Generate query embedding once
         query_embedding = self.embedding_generator.encode_query(query)
         
-        # Get all namespaces
+        # Get all namespaces (flat)
         stats = self.pinecone_manager.get_index_stats()
-        all_namespaces = stats.get('namespaces', {}).keys()
+        available_namespaces = list(stats.get('namespaces', {}).keys())
         
-        # Find relevant namespaces for date range
-        target_namespaces = []
-        for date in date_range:
-            if namespace_filter:
-                # Specific category
-                ns = f"videos:{date}:{namespace_filter}"
-                if ns in all_namespaces:
-                    target_namespaces.append(ns)
-            else:
-                # All categories for this date
-                date_ns = [ns for ns in all_namespaces if ns.startswith(f"videos:{date}:")]
-                target_namespaces.extend(date_ns)
+        def _canon(s: str) -> str:
+            return (s or '').lower().replace(' ', '_')
+        
+        # Resolve namespace filter against available
+        if namespace_filter:
+            target_canon = _canon(namespace_filter)
+            synonyms = {
+                'bag': {'bag', 'backpack', 'bagpack', 'duffel_bag', 'duffel'},
+                'backpack': {'backpack', 'bag', 'bagpack'},
+                'bagpack': {'bagpack', 'backpack', 'bag'},
+                'duffel': {'duffel_bag', 'duffel'},
+                'duffel_bag': {'duffel_bag', 'duffel'},
+                'laptop': {'laptop'}
+            }
+            candidates = synonyms.get(target_canon, {target_canon})
+            avail_canon = {_canon(ns): ns for ns in available_namespaces}
+            target_namespaces = [avail_canon[c] for c in candidates if c in avail_canon]
+        else:
+            target_namespaces = available_namespaces
         
         if not target_namespaces:
-            logger.warning(f"No namespaces found for date range {start_date} to {end_date}")
+            logger.warning(f"No namespaces found to search for the specified criteria")
             return []
         
         logger.info(f"Searching {len(target_namespaces)} namespaces")
@@ -749,6 +720,9 @@ class VideoSearchEngine:
         
         # Filter by similarity threshold
         filtered_results = [r for r in all_results if r.score >= similarity_threshold]
+        
+        # Filter by date range using metadata
+        filtered_results = [r for r in filtered_results if isinstance(r.metadata.get('video_date'), str) and (start_date <= r.metadata.get('video_date') <= end_date)]
         
         # Sort by score and take top_k
         filtered_results.sort(key=lambda x: x.score, reverse=True)
