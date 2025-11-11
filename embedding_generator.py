@@ -12,6 +12,7 @@ from tqdm import tqdm
 import gc
 from dataclasses import dataclass
 from caption_generator import CaptionedFrame
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -299,6 +300,154 @@ class TextEmbeddingGenerator:
             
             pinecone_data.append((unique_id, vector, metadata))
         
+        return pinecone_data
+
+
+# -- Image embedding support -------------------------------------------------
+from transformers import CLIPProcessor, CLIPModel
+import torch
+from typing import Any
+
+
+@dataclass
+class EmbeddedImage:
+    """Data structure for image crop embedding"""
+    image_id: str
+    embedding: np.ndarray
+    metadata: Dict[str, Any]
+
+
+class ImageEmbeddingGenerator:
+    """Generate image embeddings using a CLIP model (for cropped objects or full frames)
+    This allows storing visual embeddings in Pinecone alongside text embeddings to
+    improve retrieval accuracy by combining visual and textual similarity.
+    """
+
+    def __init__(self,
+                 model_name: str = None,
+                 batch_size: int = 32,
+                 use_gpu: bool = True,
+                 normalize: bool = True):
+        self.model_name = model_name
+        self.batch_size = batch_size
+        self.normalize = normalize
+
+        # Device
+        self.device = 'cuda' if torch.cuda.is_available() and use_gpu else 'cpu'
+        logger.info(f"Using device for image embeddings: {self.device}")
+
+        if self.model_name is None:
+            # Default to a commonly available CLIP model
+            self.model_name = 'openai/clip-vit-base-patch32'
+
+        # Load model and processor
+        self._load_model()
+
+    def _load_model(self):
+        logger.info(f"Loading image embedding model: {self.model_name}")
+        try:
+            self.processor = CLIPProcessor.from_pretrained(self.model_name)
+            self.model = CLIPModel.from_pretrained(self.model_name)
+            self.model = self.model.to(self.device)
+            self.model.eval()
+            logger.info("Image embedding model loaded successfully")
+            # Expose dimension
+            self.embedding_dim = self.model.visual_projection.out_features if hasattr(self.model, 'visual_projection') else self.model.config.projection_dim if hasattr(self.model.config, 'projection_dim') else None
+            if self.embedding_dim is None:
+                # Fallback: infer from a dummy run
+                with torch.no_grad():
+                    dummy = self.processor(images=Image.new('RGB', (224, 224)), return_tensors='pt')
+                    dummy = {k: v.to(self.device) for k, v in dummy.items()}
+                    out = self.model.get_image_features(**dummy)
+                    self.embedding_dim = out.shape[-1]
+            logger.info(f"Image embedding dim: {self.embedding_dim}")
+        except Exception as e:
+            logger.error(f"Failed to load image embedding model: {e}")
+            raise
+
+    def generate_image_embeddings(self, items: List[Any], show_progress: bool = True) -> List[EmbeddedImage]:
+        """Generate embeddings for images or cropped regions.
+
+        items: list of objects where each element provides either:
+          - .cropped_image (PIL Image) for object crops (DetectedObject), or
+          - .frame_data.image (PIL Image) for captioned frames (CaptionedFrame), or
+          - attribute .image (PIL Image)
+        Returns: list of EmbeddedImage
+        """
+        if not items:
+            return []
+
+        images = []
+        ids = []
+        metadata_list = []
+
+        for idx, item in enumerate(items):
+            # Resolve image
+            img = None
+            meta = {}
+            if hasattr(item, 'cropped_image') and item.cropped_image is not None:
+                img = item.cropped_image
+                # try to get frame id and timestamp if present
+                meta['frame_id'] = getattr(item, 'frame_id', '') or getattr(getattr(item, 'frame_data', None), 'frame_id', '')
+                meta['timestamp'] = getattr(item, 'timestamp', None) or getattr(getattr(item, 'frame_data', None), 'timestamp', None)
+                # if item has label/caption include it
+                meta['label'] = getattr(item, 'label', '')
+            elif hasattr(item, 'frame_data') and getattr(item.frame_data, 'image', None) is not None:
+                img = item.frame_data.image
+                meta['frame_id'] = getattr(item.frame_data, 'frame_id', '')
+                meta['timestamp'] = getattr(item.frame_data, 'timestamp', None)
+            elif hasattr(item, 'image'):
+                img = item.image
+
+            if img is None:
+                continue
+
+            images.append(img)
+            # craft id
+            base_id = meta.get('frame_id') or f"img_{idx}"
+            img_id = f"{base_id}_img"
+            ids.append(img_id)
+            metadata_list.append(meta)
+
+        # Batch processing
+        embedded = []
+        iterator = range(0, len(images), self.batch_size)
+        for i in tqdm(iterator, desc="Encoding images"):
+            batch_imgs = images[i:i + self.batch_size]
+            try:
+                inputs = self.processor(images=batch_imgs, return_tensors='pt', padding=True)
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                with torch.no_grad():
+                    feats = self.model.get_image_features(**inputs)
+
+                feats = feats.cpu().numpy()
+                if self.normalize:
+                    norms = np.linalg.norm(feats, axis=1, keepdims=True)
+                    norms[norms == 0] = 1.0
+                    feats = feats / norms
+
+                for j, vec in enumerate(feats):
+                    meta = metadata_list[i + j]
+                    embedded.append(EmbeddedImage(image_id=ids[i + j], embedding=vec, metadata=meta))
+            except Exception as e:
+                logger.error(f"Error encoding image batch starting at {i}: {e}")
+
+        logger.info(f"Generated {len(embedded)} image embeddings")
+        return embedded
+
+    def prepare_for_pinecone(self, embedded_images: List[EmbeddedImage], video_name: str = "video", source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
+        pinecone_data = []
+        for ei in embedded_images:
+            vector = ei.embedding.tolist()
+            metadata = {
+                'frame_id': ei.metadata.get('frame_id', ''),
+                'timestamp': ei.metadata.get('timestamp', 0.0),
+                'video_name': video_name,
+                'label': ei.metadata.get('label', '') if 'label' in ei.metadata else '',
+                'source_file_path': source_file_path,
+            }
+            pinecone_data.append((ei.image_id, vector, metadata))
+
         return pinecone_data
     
     def augment_embeddings(self,

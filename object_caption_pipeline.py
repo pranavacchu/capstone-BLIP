@@ -15,6 +15,7 @@ from difflib import SequenceMatcher
 
 from object_detector import GroundingDINODetector, DetectedObject
 from caption_generator import BlipCaptionGenerator
+from video_search_config import Config
 from frame_extractor import FrameData
 
 # Configure logging
@@ -31,6 +32,7 @@ class ObjectCaption:
     confidence: float
     is_object_focused: bool = True  # Flag to distinguish from scene captions
     namespace: str = ""  # Pinecone namespace for this object category
+    cropped_image: Optional[Image.Image] = None  # Store the cropped image for downstream embedding
 
 class ObjectCaptionPipeline:
     """
@@ -81,6 +83,7 @@ class ObjectCaptionPipeline:
         if caption_generator is None:
             logger.info("Initializing BLIP caption generator...")
             self.caption_generator = BlipCaptionGenerator(
+                model_name=Config.OBJECT_BLIP_MODEL,
                 batch_size=4,  # Smaller batch for cropped objects
                 use_gpu=use_gpu,
                 max_length=30,  # Shorter captions for objects
@@ -182,7 +185,8 @@ class ObjectCaptionPipeline:
                             attribute_caption=caption_text,
                             confidence=detection.confidence,
                             is_object_focused=True,
-                            namespace=namespace
+                            namespace=namespace,
+                            cropped_image=detection.cropped_image
                         )
                         object_captions.append(obj_caption)
                         
@@ -216,6 +220,35 @@ class ObjectCaptionPipeline:
             logger.error(f"Error processing frame {frame_data.frame_id}: {e}")
         
         return object_captions
+
+    def generate_image_embeddings_for_object_captions(self,
+                                                     object_captions: List[ObjectCaption],
+                                                     image_embedding_generator,
+                                                     video_name: str = "video",
+                                                     source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
+        """Generate image embeddings for object crops and prepare Pinecone upload tuples.
+
+        Args:
+            object_captions: List of ObjectCaption (must include cropped_image)
+            image_embedding_generator: Instance of ImageEmbeddingGenerator
+            video_name: Video name for metadata
+            source_file_path: Optional source path for metadata
+
+        Returns:
+            List of (id, vector, metadata) tuples ready for Pinecone upload
+        """
+        # Filter captions that have a crop
+        crops = [oc for oc in object_captions if oc.cropped_image is not None]
+        if not crops:
+            return []
+
+        # Use the provided image embedding generator to create embeddings
+        embedded_images = image_embedding_generator.generate_image_embeddings(crops)
+
+        # Prepare tuples for Pinecone
+        pinecone_tuples = image_embedding_generator.prepare_for_pinecone(embedded_images, video_name=video_name, source_file_path=source_file_path)
+
+        return pinecone_tuples
     
     def process_frames(self,
                       frames: List[FrameData],

@@ -237,6 +237,97 @@ class PineconeManager:
             import traceback
             logger.error(traceback.format_exc())
             return uploaded_count
+
+    def get_index(self, index_name: str):
+        """Return a Pinecone Index object for the given index name.
+        If the name matches the manager's primary index, return the cached index.
+        """
+        try:
+            if index_name == self.index_name:
+                return self.index
+            return self.pc.Index(index_name)
+        except Exception as e:
+            logger.error(f"Failed to get index {index_name}: {e}")
+            raise
+
+    def upload_embeddings_to_index(self,
+                                   index_name: str,
+                                   data: List[Tuple[str, List[float], Dict]],
+                                   batch_size: int = 100,
+                                   namespace: str = "",
+                                   max_retries: int = 3) -> int:
+        """Upload embeddings to a specific index (useful for image embeddings with different dim).
+
+        This method does not enforce the manager's primary dimension and will use the
+        provided index_name to perform the upsert. It otherwise mirrors upload_embeddings
+        behavior (batching + retry).
+        """
+        if not data:
+            logger.warning("No data to upload")
+            return 0
+
+        logger.info(f"Uploading {len(data)} vectors to Pinecone index '{index_name}' (namespace: '{namespace or 'default'}')")
+
+        uploaded_count = 0
+        failed_batches = []
+
+        try:
+            idx = self.get_index(index_name)
+
+            for i in tqdm(range(0, len(data), batch_size), desc=f"Uploading to {index_name}"):
+                batch = data[i:i + batch_size]
+
+                vectors = []
+                for item_id, vector, metadata in batch:
+                    if not isinstance(vector, list):
+                        logger.error(f"Vector for {item_id} is not a list: {type(vector)}")
+                        continue
+
+                    vectors.append({
+                        'id': item_id,
+                        'values': vector,
+                        'metadata': metadata
+                    })
+
+                if not vectors:
+                    logger.warning(f"No valid vectors in batch {i}")
+                    continue
+
+                success = False
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        response = idx.upsert(vectors=vectors, namespace=namespace)
+                        upserted = response.get('upserted_count', len(vectors))
+                        uploaded_count += upserted
+                        logger.info(f"Batch {i//batch_size + 1}: Uploaded {upserted} vectors to index '{index_name}' namespace '{namespace or 'default'}'")
+                        success = True
+                        break
+                    except Exception as batch_error:
+                        last_error = batch_error
+                        if attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 2
+                            logger.warning(f"Batch upload attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"Batch upload failed after {max_retries} attempts: {batch_error}")
+                            failed_batches.append((i, batch, str(batch_error)))
+
+                if not success and last_error:
+                    logger.warning(f"Failed to upload batch starting at index {i}: {last_error}")
+
+            if failed_batches:
+                logger.warning(f"Failed to upload {len(failed_batches)} batches ({sum(len(b[1]) for b in failed_batches)} vectors)")
+
+            logger.info(f"✅ Successfully uploaded {uploaded_count} vectors to index '{index_name}' (namespace: '{namespace or 'default'}')")
+
+            return uploaded_count
+
+        except Exception as e:
+            logger.error(f"Failed to upload embeddings to index '{index_name}': {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return uploaded_count
     
     def query(self,
              query_vector: np.ndarray,

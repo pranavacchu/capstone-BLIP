@@ -25,9 +25,15 @@ class Config:
     
     # Model Configuration
     BLIP_MODEL = 'Salesforce/blip-image-captioning-base'
+    # Use a lightweight/faster BLIP model for object crops to improve throughput
+    OBJECT_BLIP_MODEL = 'Salesforce/blip-image-captioning-small'
     # Using multilingual-e5-large for better semantic understanding
     EMBEDDING_MODEL = 'intfloat/multilingual-e5-large'  # 1024 dimensions
     # Alternative: 'sentence-transformers/all-MiniLM-L6-v2' (384 dimensions)
+    # Image embedding model (CLIP) to generate visual embeddings for crops
+    IMAGE_EMBEDDING_MODEL = 'openai/clip-vit-large-patch14'
+    # Expected dimension for the image embedding model (used when creating image index)
+    IMAGE_EMBEDDING_DIM = 1024
     
     # Frame Extraction Configuration
     FRAME_SIMILARITY_THRESHOLD = 0.90  # Higher threshold to capture more frames (only skip very similar frames)
