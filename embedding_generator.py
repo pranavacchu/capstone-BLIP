@@ -12,10 +12,12 @@ from tqdm import tqdm
 import gc
 from dataclasses import dataclass
 from caption_generator import CaptionedFrame
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class EmbeddedFrame:
@@ -24,9 +26,10 @@ class EmbeddedFrame:
     embedding: np.ndarray
     embedding_id: str
 
+
 class TextEmbeddingGenerator:
     """Generate embeddings for text using sentence-transformers"""
-    
+
     def __init__(self,
                  model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
                  batch_size: int = 32,
@@ -34,7 +37,7 @@ class TextEmbeddingGenerator:
                  normalize: bool = True):
         """
         Initialize the text embedding generator
-        
+
         Args:
             model_name: Sentence transformer model name
             batch_size: Batch size for encoding
@@ -44,83 +47,85 @@ class TextEmbeddingGenerator:
         self.model_name = model_name
         self.batch_size = batch_size
         self.normalize = normalize
-        
+
         # Set device
         self.device = 'cuda' if torch.cuda.is_available() and use_gpu else 'cpu'
         logger.info(f"Using device: {self.device}")
-        
+
         # Load model
         self._load_model()
-        
+
         # Get embedding dimension
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
         logger.info(f"Embedding dimension: {self.embedding_dim}")
-    
+
     def _load_model(self):
         """Load sentence transformer model"""
         logger.info(f"Loading embedding model: {self.model_name}")
-        
+
         try:
-            self.model = SentenceTransformer(self.model_name, device=self.device)
-            
+            self.model = SentenceTransformer(
+                self.model_name, device=self.device)
+
             # Set model to evaluation mode
             self.model.eval()
-            
+
             logger.info("Embedding model loaded successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
             raise
-    
-    def generate_embeddings(self, 
-                          captioned_frames: List[CaptionedFrame],
-                          show_progress: bool = True) -> List[EmbeddedFrame]:
+
+    def generate_embeddings(self,
+                            captioned_frames: List[CaptionedFrame],
+                            show_progress: bool = True) -> List[EmbeddedFrame]:
         """
         Generate embeddings for captioned frames
-        
+
         Args:
             captioned_frames: List of CaptionedFrame objects
             show_progress: Whether to show progress bar
-            
+
         Returns:
             List of EmbeddedFrame objects
         """
         if not captioned_frames:
             return []
-        
-        logger.info(f"Generating embeddings for {len(captioned_frames)} captions")
-        
+
+        logger.info(
+            f"Generating embeddings for {len(captioned_frames)} captions")
+
         # Extract captions
         captions = [cf.caption for cf in captioned_frames]
-        
+
         # Generate embeddings
         embeddings = self._encode_batch(captions, show_progress=show_progress)
-        
+
         # Create EmbeddedFrame objects
         embedded_frames = []
         for cf, embedding in zip(captioned_frames, embeddings):
             # Generate unique embedding ID
             embedding_id = f"{cf.frame_data.frame_id}_emb"
-            
+
             embedded_frame = EmbeddedFrame(
                 captioned_frame=cf,
                 embedding=embedding,
                 embedding_id=embedding_id
             )
             embedded_frames.append(embedded_frame)
-        
+
         logger.info(f"Generated {len(embedded_frames)} embeddings")
         return embedded_frames
-    
-    def _encode_batch(self, texts: List[str], 
-                     show_progress: bool = True) -> np.ndarray:
+
+    def _encode_batch(self, texts: List[str],
+                      show_progress: bool = True) -> np.ndarray:
         """
         Encode a batch of texts into embeddings
-        
+
         Args:
             texts: List of text strings
             show_progress: Whether to show progress bar
-            
+
         Returns:
             Numpy array of embeddings [N, embedding_dim]
         """
@@ -132,16 +137,16 @@ class TextEmbeddingGenerator:
             convert_to_numpy=True,
             normalize_embeddings=self.normalize
         )
-        
+
         return embeddings
-    
+
     def encode_query(self, query: str) -> np.ndarray:
         """
         Encode a single query text
-        
+
         Args:
             query: Query string
-            
+
         Returns:
             Query embedding vector
         """
@@ -151,20 +156,20 @@ class TextEmbeddingGenerator:
             convert_to_numpy=True,
             normalize_embeddings=self.normalize
         )
-        
+
         # Ensure it's a 1D array
         if len(embedding.shape) > 1:
             embedding = embedding.squeeze()
-        
+
         return embedding
-    
+
     def encode_queries(self, queries: List[str]) -> np.ndarray:
         """
         Encode multiple queries
-        
+
         Args:
             queries: List of query strings
-            
+
         Returns:
             Array of query embeddings [N, embedding_dim]
         """
@@ -174,19 +179,19 @@ class TextEmbeddingGenerator:
             convert_to_numpy=True,
             normalize_embeddings=self.normalize
         )
-        
+
         return embeddings
-    
-    def compute_similarity(self, 
-                          query_embedding: np.ndarray,
-                          embeddings: np.ndarray) -> np.ndarray:
+
+    def compute_similarity(self,
+                           query_embedding: np.ndarray,
+                           embeddings: np.ndarray) -> np.ndarray:
         """
         Compute similarity between query and embeddings
-        
+
         Args:
             query_embedding: Query embedding vector
             embeddings: Array of embeddings to compare against
-            
+
         Returns:
             Similarity scores
         """
@@ -196,97 +201,92 @@ class TextEmbeddingGenerator:
         else:
             # Compute cosine similarity manually
             query_norm = query_embedding / np.linalg.norm(query_embedding)
-            embeddings_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embeddings_norm = embeddings / \
+                np.linalg.norm(embeddings, axis=1, keepdims=True)
             similarities = np.dot(embeddings_norm, query_norm)
-        
+
         return similarities
-    
+
     def find_similar(self,
-                    query: str,
-                    embedded_frames: List[EmbeddedFrame],
-                    top_k: int = 10,
-                    threshold: float = 0.5) -> List[Tuple[EmbeddedFrame, float]]:
+                     query: str,
+                     embedded_frames: List[EmbeddedFrame],
+                     top_k: int = 10,
+                     threshold: float = 0.5) -> List[Tuple[EmbeddedFrame, float]]:
         """
         Find similar frames to a query
-        
+
         Args:
             query: Query string
             embedded_frames: List of EmbeddedFrame objects
             top_k: Number of top results to return
             threshold: Minimum similarity threshold
-            
+
         Returns:
             List of (EmbeddedFrame, similarity_score) tuples
         """
         # Encode query
         query_embedding = self.encode_query(query)
-        
+
         # Extract embeddings from frames
         embeddings = np.array([ef.embedding for ef in embedded_frames])
-        
+
         # Compute similarities
         similarities = self.compute_similarity(query_embedding, embeddings)
-        
+
         # Get top-k indices
         top_indices = np.argsort(similarities)[::-1][:top_k]
-        
+
         # Filter by threshold and create results
         results = []
         for idx in top_indices:
             score = float(similarities[idx])
             if score >= threshold:
                 results.append((embedded_frames[idx], score))
-        
+
         return results
-    
-    def create_embedding_matrix(self, 
-                               embedded_frames: List[EmbeddedFrame]) -> Tuple[np.ndarray, List[str]]:
+
+    def create_embedding_matrix(self,
+                                embedded_frames: List[EmbeddedFrame]) -> Tuple[np.ndarray, List[str]]:
         """
         Create embedding matrix and ID list for batch operations
-        
+
         Args:
             embedded_frames: List of EmbeddedFrame objects
-            
+
         Returns:
             Tuple of (embedding_matrix, embedding_ids)
         """
         embeddings = []
         ids = []
-        
+
         for ef in embedded_frames:
             embeddings.append(ef.embedding)
             ids.append(ef.embedding_id)
-        
+
         embedding_matrix = np.array(embeddings)
-        
+
         return embedding_matrix, ids
-    
-    def prepare_for_pinecone(self, 
-                           embedded_frames: List[EmbeddedFrame],
-                           video_name: str = "video",
-                           source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
+
+    def prepare_for_pinecone(self, embedded_frames, video_name: str = "", source_file_path: str = "", video_date: str = None):
         """
-        Prepare data for Pinecone upload
-        
-        Args:
-            embedded_frames: List of EmbeddedFrame objects
-            video_name: Name of the video for metadata
-            
-        Returns:
-            List of (id, vector, metadata) tuples for Pinecone
+        Prepare list of (id, vector, metadata) tuples for Pinecone upload.
+        Accepts an optional video_date (YYYY-MM-DD) that will be stored on every vector.
         """
-        pinecone_data = []
-        
+        pinecone_items = []
         for idx, ef in enumerate(embedded_frames):
-            # Create unique ID that includes object index to avoid collisions
-            # Format: frameID_objectIdx_emb
+            # unique id for this embedding
             unique_id = f"{ef.captioned_frame.frame_data.frame_id}_obj{idx}_emb"
-            
-            # Convert embedding to list
-            vector = ef.embedding.tolist()
-            
-            # Prepare metadata
+
+            # ensure embedding is a plain list
+            vector = ef.embedding.tolist() if hasattr(
+                ef.embedding, "tolist") else list(ef.embedding)
+
+            # prefer explicit video_date arg, otherwise fall back to frame_data if present
+            meta_video_date = video_date or getattr(
+                ef.captioned_frame.frame_data, "video_date", None)
+
             metadata = {
+<<<<<<< HEAD
                 'timestamp': ef.captioned_frame.frame_data.timestamp,
                 'caption': ef.captioned_frame.caption,
                 'frame_id': ef.captioned_frame.frame_data.frame_id,
@@ -295,85 +295,98 @@ class TextEmbeddingGenerator:
                 'source_file_path': source_file_path,
                 'video_date': ef.captioned_frame.frame_data.video_date,  # Include video date
                 'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', '')  # Include namespace for object detection
+=======
+                "timestamp": getattr(ef.captioned_frame.frame_data, "timestamp", None),
+                "caption": ef.captioned_frame.caption,
+                "frame_id": getattr(ef.captioned_frame.frame_data, "frame_id", None),
+                "frame_index": getattr(ef.captioned_frame.frame_data, "frame_index", None),
+                "video_name": video_name,
+                "source_file_path": source_file_path,
+                "video_date": meta_video_date,
+                # if object detection: include detected category so upload grouping can use it
+                "object_category": getattr(ef.captioned_frame, "object_category", None) or getattr(ef, "object_category", None)
+>>>>>>> c87a9a340060323f4175f29a5e7f1dae7c8ae6a7
             }
-            
-            pinecone_data.append((unique_id, vector, metadata))
-        
-        return pinecone_data
-    
+
+            pinecone_items.append((unique_id, vector, metadata))
+
+        return pinecone_items
+
     def augment_embeddings(self,
-                          embedded_frames: List[EmbeddedFrame],
-                          augmentation_factor: float = 0.1) -> List[EmbeddedFrame]:
+                           embedded_frames: List[EmbeddedFrame],
+                           augmentation_factor: float = 0.1) -> List[EmbeddedFrame]:
         """
         Augment embeddings with small perturbations for better retrieval
-        
+
         Args:
             embedded_frames: List of EmbeddedFrame objects
             augmentation_factor: Factor for perturbation (0.0 to 1.0)
-            
+
         Returns:
             Augmented EmbeddedFrame objects
         """
         augmented = []
-        
+
         for ef in embedded_frames:
             # Add small random perturbation
             noise = np.random.randn(*ef.embedding.shape) * augmentation_factor
             augmented_embedding = ef.embedding + noise
-            
+
             # Re-normalize if needed
             if self.normalize:
-                augmented_embedding = augmented_embedding / np.linalg.norm(augmented_embedding)
-            
+                augmented_embedding = augmented_embedding / \
+                    np.linalg.norm(augmented_embedding)
+
             # Create new EmbeddedFrame with augmented embedding
             augmented_ef = EmbeddedFrame(
                 captioned_frame=ef.captioned_frame,
                 embedding=augmented_embedding,
                 embedding_id=f"{ef.embedding_id}_aug"
             )
-            
+
             augmented.append(ef)  # Keep original
             augmented.append(augmented_ef)  # Add augmented
-        
+
         return augmented
-    
+
     def deduplicate_embeddings(self,
-                              embedded_frames: List[EmbeddedFrame],
-                              similarity_threshold: float = 0.95) -> List[EmbeddedFrame]:
+                               embedded_frames: List[EmbeddedFrame],
+                               similarity_threshold: float = 0.95) -> List[EmbeddedFrame]:
         """
         Remove duplicate embeddings based on similarity threshold
-        
+
         Args:
             embedded_frames: List of EmbeddedFrame objects
             similarity_threshold: Minimum similarity to consider as duplicate (0.0 to 1.0)
-            
+
         Returns:
             List of unique EmbeddedFrame objects
         """
         if not embedded_frames:
             return []
-        
+
         if len(embedded_frames) <= 1:
             return embedded_frames
-        
-        logger.info(f"Deduplicating {len(embedded_frames)} embeddings with threshold {similarity_threshold}")
-        
+
+        logger.info(
+            f"Deduplicating {len(embedded_frames)} embeddings with threshold {similarity_threshold}")
+
         # Convert to numpy array for efficient computation
         embeddings = np.array([ef.embedding for ef in embedded_frames])
-        
+
         # Track which embeddings to keep
         keep_mask = np.ones(len(embedded_frames), dtype=bool)
-        
+
         # Compare each embedding with subsequent ones
         for i in range(len(embeddings)):
             if not keep_mask[i]:
                 continue
-            
+
             # Compute similarity with all subsequent embeddings
             for j in range(i + 1, len(embeddings)):
                 if not keep_mask[j]:
                     continue
-                
+
                 # Compute cosine similarity
                 if self.normalize:
                     # If normalized, use dot product
@@ -381,28 +394,31 @@ class TextEmbeddingGenerator:
                 else:
                     # Compute cosine similarity manually
                     similarity = np.dot(embeddings[i], embeddings[j]) / (
-                        np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[j])
+                        np.linalg.norm(embeddings[i]) *
+                        np.linalg.norm(embeddings[j])
                     )
-                
+
                 # Mark as duplicate if similarity exceeds threshold
                 if similarity >= similarity_threshold:
                     keep_mask[j] = False
-        
+
         # Filter embeddings based on keep mask
-        unique_frames = [ef for ef, keep in zip(embedded_frames, keep_mask) if keep]
-        
+        unique_frames = [ef for ef, keep in zip(
+            embedded_frames, keep_mask) if keep]
+
         removed_count = len(embedded_frames) - len(unique_frames)
-        logger.info(f"Removed {removed_count} duplicate embeddings, kept {len(unique_frames)} unique")
-        
+        logger.info(
+            f"Removed {removed_count} duplicate embeddings, kept {len(unique_frames)} unique")
+
         return unique_frames
-    
+
     def get_embedding_statistics(self, embedded_frames: List[EmbeddedFrame]) -> Dict:
         """Get statistics about embeddings"""
         if not embedded_frames:
             return {"total": 0}
-        
+
         embeddings = np.array([ef.embedding for ef in embedded_frames])
-        
+
         stats = {
             "total": len(embeddings),
             "dimension": embeddings.shape[1],
@@ -410,22 +426,183 @@ class TextEmbeddingGenerator:
             "std_norm": float(np.std(np.linalg.norm(embeddings, axis=1))),
             "mean_similarity": float(np.mean(np.dot(embeddings, embeddings.T)))
         }
-        
+
         return stats
-    
+
     def clear_cache(self):
         """Clear cache and free memory"""
         gc.collect()
         if self.device == 'cuda':
             torch.cuda.empty_cache()
         logger.info("Cache cleared")
-    
+
     def unload_model(self):
         """Unload model from memory"""
         del self.model
         self.clear_cache()
         logger.info("Embedding model unloaded")
 
+    def _prepare_single_item(self, ef, video_name: str = "", source_file_path: str = "", video_date: str = None):
+        """
+        Prepare a single (id, vector, metadata) tuple for Pinecone from one EmbeddedFrame-like object.
+        Minimal, safe conversion that matches prepare_for_pinecone output.
+        """
+        # Unique id: keep same pattern used elsewhere
+        frame_id = getattr(ef.captioned_frame.frame_data, "frame_id", None) or getattr(
+            ef, "frame_id", None) or f"frame_{id(ef)}"
+        unique_id = f"{frame_id}_obj_emb"
+
+        # Convert embedding to plain list
+        emb = getattr(ef, "embedding", None)
+        try:
+            if hasattr(emb, "tolist"):
+                vector = emb.tolist()
+            else:
+                vector = list(emb)
+        except Exception:
+            # Fallback: try numpy conversion
+            import numpy as _np
+            vector = _np.asarray(emb).tolist()
+
+        # metadata fields (safe getattr)
+        fd = getattr(ef.captioned_frame, "frame_data", None) or getattr(
+            ef, "frame_data", None) or {}
+        timestamp = getattr(fd, "timestamp", None)
+        caption = getattr(ef.captioned_frame, "caption",
+                          None) or getattr(ef, "caption", None)
+        frame_index = getattr(fd, "frame_index", None)
+        meta_video_date = video_date or getattr(
+            fd, "video_date", None) or getattr(ef, "video_date", None)
+
+        # object category (if available)
+        obj_cat = getattr(ef.captioned_frame, "object_category",
+                          None) or getattr(ef, "object_category", None)
+
+        metadata = {
+            "timestamp": timestamp,
+            "caption": caption,
+            "frame_id": frame_id,
+            "frame_index": frame_index,
+            "video_name": video_name,
+            "source_file_path": source_file_path,
+            "video_date": meta_video_date,
+            "object_category": obj_cat
+        }
+
+        return (unique_id, vector, metadata)
+
+    def _sanitize_namespace(self, ns: str) -> str:
+        """Sanitize namespace to allowed characters and lowercase. Return '' for empty/None."""
+        if not ns:
+            return ""
+        # Allow a small safe charset: lowercase letters, numbers, underscore, hyphen, colon
+        ns = ns.lower()
+        ns = re.sub(r'[^a-z0-9:_-]', '_', ns)
+        # Avoid accidental very long namespace
+        return ns[:128]
+
+    def upload_embeddings(self,
+                         data: List[Tuple[str, List[float], Dict]],
+                         batch_size: int = 100,
+                         namespace: str = "",
+                         max_retries: int = 3) -> int:
+        """
+        Upload embeddings to Pinecone index
+
+        Args:
+            data: List of (id, vector, metadata) tuples
+            batch_size: Batch size for uploading
+            namespace: Namespace for organizing vectors in Pinecone
+            max_retries: Maximum number of retries for upsert
+
+        Returns:
+            Total number of upserted vectors
+        """
+        if not data:
+            return 0
+
+        logger.info(f"Uploading {len(data)} embeddings to Pinecone")
+
+        # Split data into batches
+        batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+
+        total_upserted = 0
+
+        for batch in tqdm(batches, desc="Uploading batches"):
+            vectors, metadatas = zip(*[(item[1], item[2]) for item in batch])
+
+            # Prepare upsert request
+            upsert_data = [
+                {
+                    "id": item[0],
+                    "vector": item[1],
+                    "metadata": item[2]
+                }
+                for item in batch
+            ]
+
+            # Retry logic
+            for attempt in range(max_retries):
+                try:
+                    # Upsert batch with retry
+                    safe_ns = self._sanitize_namespace(namespace)
+                    response = self.index.upsert(vectors=vectors, namespace=safe_ns)
+                    upserted = response.get('upserted_count', len(vectors))
+                    total_upserted += upserted
+                    logger.info(f"Upserted {upserted} vectors in batch")
+                    break  # Exit retry loop on success
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1} failed: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to upsert batch after {max_retries} attempts")
+                        raise
+
+        logger.info(f"Total upserted vectors: {total_upserted}")
+        return total_upserted
+
+    def query(self,
+             query_vector: np.ndarray,
+             top_k: int = 10,
+             filter: Optional[Dict] = None,
+             namespace: str = "",
+             include_metadata: bool = True) -> List[SearchResult]:
+        """
+        Query Pinecone index for similar vectors
+
+        Args:
+            query_vector: Query vector
+            top_k: Number of top results to return
+            filter: Optional filter for metadata fields
+            namespace: Namespace for organizing vectors in Pinecone
+            include_metadata: Whether to include metadata in results
+
+        Returns:
+            List of SearchResult objects
+        """
+        # Convert query vector to list
+        query_vector_list = query_vector.tolist() if hasattr(query_vector, "tolist") else list(query_vector)
+
+        # Query Pinecone
+        safe_ns = self._sanitize_namespace(namespace)
+        results = self.index.query(
+            vector=query_vector_list,
+            top_k=top_k,
+            filter=filter,
+            namespace=safe_ns,
+            include_metadata=include_metadata
+        )
+
+        # Parse results
+        search_results = []
+        for match in results.get('matches', []):
+            search_result = SearchResult(
+                id=match.get('id'),
+                score=match.get('score'),
+                metadata=match.get('metadata', {})
+            )
+            search_results.append(search_result)
+
+        return search_results
 
 # Example usage and testing
 if __name__ == "__main__":
@@ -436,30 +613,30 @@ if __name__ == "__main__":
         use_gpu=True,
         normalize=True
     )
-    
+
     # Example: Generate embeddings for captioned frames
     # from frame_extractor import VideoFrameExtractor
     # from caption_generator import BlipCaptionGenerator
-    # 
+    #
     # # Extract frames
     # extractor = VideoFrameExtractor()
     # frames = extractor.extract_frames("sample_video.mp4")
-    # 
+    #
     # # Generate captions
     # caption_gen = BlipCaptionGenerator()
     # captioned_frames = caption_gen.generate_captions(frames)
-    # 
+    #
     # # Generate embeddings
     # embedded_frames = generator.generate_embeddings(captioned_frames)
-    # 
+    #
     # # Get statistics
     # stats = generator.get_embedding_statistics(embedded_frames)
     # print(f"Embedding statistics: {stats}")
-    # 
+    #
     # # Test similarity search
     # query = "a person walking"
     # results = generator.find_similar(query, embedded_frames, top_k=5)
-    # 
+    #
     # for ef, score in results:
     #     print(f"Score: {score:.3f} - Caption: {ef.captioned_frame.caption}")
     #     print(f"  Timestamp: {ef.captioned_frame.frame_data.timestamp:.2f}s")
