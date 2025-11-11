@@ -12,6 +12,7 @@ from tqdm import tqdm
 import gc
 from dataclasses import dataclass
 from caption_generator import CaptionedFrame
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -479,6 +480,118 @@ class TextEmbeddingGenerator:
 
         return (unique_id, vector, metadata)
 
+    def _sanitize_namespace(self, ns: str) -> str:
+        """Sanitize namespace to allowed characters and lowercase. Return '' for empty/None."""
+        if not ns:
+            return ""
+        # Allow a small safe charset: lowercase letters, numbers, underscore, hyphen, colon
+        ns = ns.lower()
+        ns = re.sub(r'[^a-z0-9:_-]', '_', ns)
+        # Avoid accidental very long namespace
+        return ns[:128]
+
+    def upload_embeddings(self,
+                         data: List[Tuple[str, List[float], Dict]],
+                         batch_size: int = 100,
+                         namespace: str = "",
+                         max_retries: int = 3) -> int:
+        """
+        Upload embeddings to Pinecone index
+
+        Args:
+            data: List of (id, vector, metadata) tuples
+            batch_size: Batch size for uploading
+            namespace: Namespace for organizing vectors in Pinecone
+            max_retries: Maximum number of retries for upsert
+
+        Returns:
+            Total number of upserted vectors
+        """
+        if not data:
+            return 0
+
+        logger.info(f"Uploading {len(data)} embeddings to Pinecone")
+
+        # Split data into batches
+        batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+
+        total_upserted = 0
+
+        for batch in tqdm(batches, desc="Uploading batches"):
+            vectors, metadatas = zip(*[(item[1], item[2]) for item in batch])
+
+            # Prepare upsert request
+            upsert_data = [
+                {
+                    "id": item[0],
+                    "vector": item[1],
+                    "metadata": item[2]
+                }
+                for item in batch
+            ]
+
+            # Retry logic
+            for attempt in range(max_retries):
+                try:
+                    # Upsert batch with retry
+                    safe_ns = self._sanitize_namespace(namespace)
+                    response = self.index.upsert(vectors=vectors, namespace=safe_ns)
+                    upserted = response.get('upserted_count', len(vectors))
+                    total_upserted += upserted
+                    logger.info(f"Upserted {upserted} vectors in batch")
+                    break  # Exit retry loop on success
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1} failed: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to upsert batch after {max_retries} attempts")
+                        raise
+
+        logger.info(f"Total upserted vectors: {total_upserted}")
+        return total_upserted
+
+    def query(self,
+             query_vector: np.ndarray,
+             top_k: int = 10,
+             filter: Optional[Dict] = None,
+             namespace: str = "",
+             include_metadata: bool = True) -> List[SearchResult]:
+        """
+        Query Pinecone index for similar vectors
+
+        Args:
+            query_vector: Query vector
+            top_k: Number of top results to return
+            filter: Optional filter for metadata fields
+            namespace: Namespace for organizing vectors in Pinecone
+            include_metadata: Whether to include metadata in results
+
+        Returns:
+            List of SearchResult objects
+        """
+        # Convert query vector to list
+        query_vector_list = query_vector.tolist() if hasattr(query_vector, "tolist") else list(query_vector)
+
+        # Query Pinecone
+        safe_ns = self._sanitize_namespace(namespace)
+        results = self.index.query(
+            vector=query_vector_list,
+            top_k=top_k,
+            filter=filter,
+            namespace=safe_ns,
+            include_metadata=include_metadata
+        )
+
+        # Parse results
+        search_results = []
+        for match in results.get('matches', []):
+            search_result = SearchResult(
+                id=match.get('id'),
+                score=match.get('score'),
+                metadata=match.get('metadata', {})
+            )
+            search_results.append(search_result)
+
+        return search_results
 
 # Example usage and testing
 if __name__ == "__main__":
