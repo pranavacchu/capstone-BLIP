@@ -546,6 +546,37 @@ class PineconeManager:
         except Exception as e:
             logger.error(f"Failed to delete index: {e}")
             return False
+    
+    def upsert(self, items: list, namespace: str = ""):
+        """
+        Backwards-compatible wrapper to upsert a list of (id, vector, metadata) tuples.
+
+        Tries to call existing helper methods if present (upload_embeddings / upload),
+        otherwise does a direct index.upsert using the underlying pinecone index.
+        """
+        # If there is already a helper that does uploads, prefer it
+        if hasattr(self, "upload_embeddings"):
+            return self.upload_embeddings(data=items, namespace=namespace)
+        if hasattr(self, "upload"):
+            return self.upload(items=items, namespace=namespace)
+
+        # Fallback: try direct pinecone index upsert
+        try:
+            vectors = []
+            for _id, vec, meta in items:
+                vectors.append({"id": _id, "values": vec, "metadata": meta})
+
+            # sanitize namespace if the manager exposes a sanitizer
+            safe_ns = namespace
+            if hasattr(self, "_sanitize_namespace"):
+                safe_ns = self._sanitize_namespace(namespace)
+
+            # assume self.index is a pinecone.Index instance
+            resp = self.index.upsert(vectors=vectors, namespace=safe_ns)
+            return resp
+        except Exception as e:
+            # Re-raise with context so caller sees a helpful message
+            raise RuntimeError(f"pinecone upsert failed: {e}") from e
 
 
 # Example usage and testing
