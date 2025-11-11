@@ -14,6 +14,24 @@ import numpy as np
 from difflib import SequenceMatcher
 import difflib
 
+# Predefined namespaces (only these will ever be used)
+PREDEFINED_NAMESPACES = [
+    "bag",
+    "duffel_bag",
+    "coat_jacket",
+    "laptop",
+    "uncategorized",  # fallback namespace for unmatched captions
+]
+
+# Map namespace -> list of keywords to match quickly
+_NAMESPACE_KEYWORDS = {
+    "bag": ["bag", "handbag", "purse", "satchel"],
+    "duffel_bag": ["duffel", "duffel bag", "gym bag"],
+    "coat_jacket": ["coat", "jacket", "overcoat", "parka"],
+    "laptop": ["laptop", "notebook", "macbook"],
+    "uncategorized": [],
+}
+
 from object_detector import GroundingDINODetector, DetectedObject
 from caption_generator import BlipCaptionGenerator
 from frame_extractor import FrameData
@@ -32,24 +50,6 @@ class ObjectCaption:
     confidence: float
     is_object_focused: bool = True  # Flag to distinguish from scene captions
     namespace: str = ""  # Pinecone namespace for this object category
-
-# Predefined namespaces (only these will ever be used)
-PREDEFINED_NAMESPACES = [
-    "bag",
-    "duffel_bag",
-    "coat_jacket",
-    "laptop",
-    "uncategorized",  # fallback namespace for unmatched captions
-]
-
-# Map namespace -> list of keywords to match quickly
-_NAMESPACE_KEYWORDS = {
-    "bag": ["bag", "handbag", "purse", "satchel"],
-    "duffel_bag": ["duffel", "duffel bag", "gym bag"],
-    "coat_jacket": ["coat", "jacket", "overcoat", "parka"],
-    "laptop": ["laptop", "notebook", "macbook"],
-    "uncategorized": [],
-}
 
 class ObjectCaptionPipeline:
     """
