@@ -688,6 +688,23 @@ class MultimodalEmbeddingGenerator:
         logger.info("Multimodal models unloaded")
 
 
+# Improved fallback logic for loading image models
+def load_image_model(model_candidates):
+    """
+    Attempts to load an image model from a list of candidates.
+    Returns the first successfully loaded model or None if all fail.
+    """
+    for model_name in model_candidates:
+        try:
+            logger.info(f"Attempting to load image model: {model_name}")
+            model = SentenceTransformer(model_name)
+            logger.info(f"Successfully loaded image model: {model_name}")
+            return model
+        except Exception as e:
+            logger.warning(f"Failed to load image model '{model_name}': {e}")
+    logger.error("All image model candidates failed to load.")
+    return None
+
 # Example usage and testing
 if __name__ == "__main__":
     # Test the embedding generator
