@@ -56,7 +56,9 @@ class Config:
     # Fusion / multi-index search options
     FUSION_TEXT_WEIGHT = 0.6  # Weight for text/caption index during fusion
     FUSION_IMAGE_WEIGHT = 0.4  # Weight for image index during fusion
-    CLIP_MODEL_NAME = 'sentence-transformers/clip-vit-base-patch32'  # CLIP model for image embeddings and text->image queries
+    # Preferred CLIP model identifier(s). Use a valid SentenceTransformers/CLIP model id.
+    # Common working IDs: 'clip-ViT-B-32' or 'openai/clip-vit-base-patch32'
+    CLIP_MODEL_NAME = 'clip-ViT-B-32'  # CLIP model for image embeddings and text->image queries
     ENABLE_CLIP_DEDUPE = False  # If True, use CLIP-based semantic dedupe instead of histogram-based
     CLIP_DEDUPE_THRESHOLD = 0.88  # Similarity threshold for CLIP semantic dedupe (0-1)
     # Thumbnails

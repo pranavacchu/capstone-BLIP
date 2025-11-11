@@ -533,12 +533,24 @@ class VideoSearchEngine:
             # If dual embeddings enabled, also encode a CLIP text embedding for image index queries
             clip_query_embedding = None
             if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False):
-                try:
-                    from sentence_transformers import SentenceTransformer
-                    clip_model = SentenceTransformer(getattr(self.config, 'CLIP_MODEL_NAME', 'sentence-transformers/clip-vit-base-patch32'))
-                    clip_query_embedding = clip_model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
-                except Exception as e:
-                    logger.warning(f"Failed to load CLIP model for image-index query: {e}")
+                # Try to load a CLIP/text-image model for image-index queries with fallbacks
+                clip_query_embedding = None
+                tried = []
+                for candidate in [getattr(self.config, 'CLIP_MODEL_NAME', None), 'clip-ViT-B-32', 'openai/clip-vit-base-patch32']:
+                    if not candidate:
+                        continue
+                    try:
+                        from sentence_transformers import SentenceTransformer
+                        clip_model = SentenceTransformer(candidate, device='cpu')
+                        clip_query_embedding = clip_model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
+                        logger.info(f"Encoded query with CLIP model: {candidate}")
+                        break
+                    except Exception as e:
+                        tried.append((candidate, str(e)))
+                        logger.warning(f"Failed to load/encode with CLIP model '{candidate}': {e}")
+
+                if clip_query_embedding is None:
+                    logger.warning(f"Could not create CLIP query embedding. Tried: {[c[0] for c in tried]}")
             
             # If date_filter is provided, search date-specific namespaces
             if date_filter and namespace_filter:

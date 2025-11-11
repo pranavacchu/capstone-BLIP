@@ -487,7 +487,7 @@ class MultimodalEmbeddingGenerator:
     
     def __init__(self,
                  caption_model: str = "sentence-transformers/all-MiniLM-L6-v2",
-                 image_model: str = "sentence-transformers/clip-vit-base-patch32",
+                 image_model: str = "clip-ViT-B-32",
                  batch_size: int = 32,
                  use_gpu: bool = True,
                  normalize: bool = True,
@@ -524,7 +524,19 @@ class MultimodalEmbeddingGenerator:
         
         # Load image model
         logger.info(f"Loading image model: {image_model}")
-        self.image_model = SentenceTransformer(image_model, device=self.device)
+        # Try common model ids with graceful fallback
+        tried = []
+        for candidate in [image_model, 'clip-ViT-B-32', 'openai/clip-vit-base-patch32']:
+            try:
+                self.image_model = SentenceTransformer(candidate, device=self.device)
+                logger.info(f"Loaded image model: {candidate}")
+                break
+            except Exception as e:
+                tried.append((candidate, str(e)))
+                logger.warning(f"Failed to load image model '{candidate}': {e}")
+        else:
+            logger.error(f"Could not load any CLIP image model from candidates: {[c[0] for c in tried]}")
+            raise RuntimeError("Failed to load CLIP image model; check model id and internet/authentication")
         self.image_model.eval()
         
         self.caption_dim = self.caption_model.get_sentence_embedding_dimension()

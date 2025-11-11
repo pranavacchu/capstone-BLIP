@@ -351,11 +351,24 @@ class VideoFrameExtractor:
             return self._extract_with_similarity_filter(cap, fps, total_frames)
 
         # Lazy-load CLIP model (text+image support)
-        try:
-            clip_model = SentenceTransformer('clip-ViT-B-32')
-        except Exception:
-            # fallback hf id
-            clip_model = SentenceTransformer('sentence-transformers/clip-vit-base-patch32')
+        # Try loading a CLIP model with common ids and fall back gracefully
+        clip_model = None
+        tried = []
+        for candidate in [getattr(self, 'CLIP_MODEL_NAME', None), 'clip-ViT-B-32', 'openai/clip-vit-base-patch32']:
+            if not candidate:
+                continue
+            try:
+                clip_model = SentenceTransformer(candidate)
+                logger.info(f"Loaded CLIP model for dedupe: {candidate}")
+                break
+            except Exception as e:
+                tried.append((candidate, str(e)))
+                logger.warning(f"Failed to load CLIP model '{candidate}': {e}")
+
+        if clip_model is None:
+            logger.error(f"Could not load any CLIP model for dedupe. Tried: {[c[0] for c in tried]}")
+            # Fall back to histogram dedupe
+            return self._extract_with_similarity_filter(cap, fps, total_frames)
 
         kept_frames: List[FrameData] = []
         kept_embeddings = []  # normalized
