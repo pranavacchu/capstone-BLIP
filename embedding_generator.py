@@ -285,6 +285,9 @@ class TextEmbeddingGenerator:
             # Convert embedding to list
             vector = ef.embedding.tolist()
             
+            # Compute namespace from caption text (category-based routing)
+            computed_namespace = self._namespace_for_caption(ef.captioned_frame.caption)
+            
             # Prepare metadata
             metadata = {
                 'timestamp': ef.captioned_frame.frame_data.timestamp,
@@ -294,12 +297,31 @@ class TextEmbeddingGenerator:
                 'video_name': video_name,
                 'source_file_path': source_file_path,
                 'video_date': ef.captioned_frame.frame_data.video_date,  # Include video date
-                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', '')  # Include namespace for object detection
+                # Use computed namespace based on caption; fall back handled in helper
+                'namespace': computed_namespace
             }
             
             pinecone_data.append((unique_id, vector, metadata))
         
         return pinecone_data
+
+    def _namespace_for_caption(self, caption: str) -> str:
+        """Map a caption to a target namespace: 'bagpack', 'duffel bag', 'laptop', or fallback 'others'."""
+        text = (caption or "").lower()
+        # Backpack synonyms -> 'bagpack' (as requested)
+        backpack_terms = ["bagpack", "backpack", "bookbag", "rucksack"]
+        if any(term in text for term in backpack_terms):
+            return "bagpack"
+        # Duffel bag synonyms -> 'duffel bag'
+        duffel_terms = ["duffel bag", "duffel", "duffle"]
+        if any(term in text for term in duffel_terms):
+            return "duffel bag"
+        # Laptop synonyms -> 'laptop'
+        laptop_terms = ["laptop", "notebook", "macbook", "chromebook"]
+        if any(term in text for term in laptop_terms):
+            return "laptop"
+        # Fallback namespace for everything else
+        return "others"
     
     def augment_embeddings(self,
                           embedded_frames: List[EmbeddedFrame],

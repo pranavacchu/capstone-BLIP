@@ -257,46 +257,32 @@ class VideoSearchEngine:
                     source_file_path=video_path
                 )
                 
-                # Group by namespace if using object detection
-                if use_object_detection:
-                    namespace_groups = {}
-                    for i, (vec_id, vector, metadata) in enumerate(pinecone_data):
-                        # Get namespace from metadata (which we just added in embedding_generator)
-                        object_category = metadata.get('namespace', '')
-                        
-                        # Create date-based namespace: videos:YYYY-MM-DD:category
-                        if object_category:
-                            namespace = f"videos:{video_date}:{object_category}"
-                        else:
-                            namespace = f"videos:{video_date}:general"
-                        
-                        if namespace not in namespace_groups:
-                            namespace_groups[namespace] = []
-                        namespace_groups[namespace].append((vec_id, vector, metadata))
+                # Group by target namespaces derived from captions (applies to both modes)
+                namespace_groups = {}
+                for vec_id, vector, metadata in pinecone_data:
+                    # Namespace is computed in embedding_generator based on caption
+                    ns = metadata.get('namespace') or 'others'
+                    if ns not in namespace_groups:
+                        namespace_groups[ns] = []
+                    namespace_groups[ns].append((vec_id, vector, metadata))
+                
+                # Upload each namespace separately with logging
+                for namespace, data in namespace_groups.items():
+                    print(f"\n📁 Namespace: {namespace}")
+                    print(f"   Uploading {len(data)} vectors...")
                     
-                    # Upload each namespace separately with logging
-                    for namespace, data in namespace_groups.items():
-                        print(f"\n📁 Namespace: {namespace}")
-                        print(f"   Uploading {len(data)} vectors...")
-                        
-                        uploaded = self.pinecone_manager.upload_embeddings(
-                            data=data,
-                            batch_size=self.config.PINECONE_BATCH_SIZE,
-                            namespace=namespace
-                        )
-                        actual_uploaded += uploaded
-                        
-                        # Show sample
-                        if data:
-                            sample_caption = data[0][2].get('caption', 'N/A')
-                            print(f"   ✓ Uploaded {uploaded} vectors")
-                            print(f"   Sample caption: {sample_caption[:70]}...")
-                else:
-                    # Upload to default namespace
-                    actual_uploaded = self.pinecone_manager.upload_embeddings(
-                        data=pinecone_data,
-                        batch_size=self.config.PINECONE_BATCH_SIZE
+                    uploaded = self.pinecone_manager.upload_embeddings(
+                        data=data,
+                        batch_size=self.config.PINECONE_BATCH_SIZE,
+                        namespace=namespace
                     )
+                    actual_uploaded += uploaded
+                    
+                    # Show sample
+                    if data:
+                        sample_caption = data[0][2].get('caption', 'N/A')
+                        print(f"   ✓ Uploaded {uploaded} vectors")
+                        print(f"   Sample caption: {sample_caption[:70]}...")
                 
                 # Print verification
                 print(f"\n{'='*80}")
