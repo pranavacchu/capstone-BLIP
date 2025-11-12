@@ -264,13 +264,16 @@ class TextEmbeddingGenerator:
     def prepare_for_pinecone(self, 
                            embedded_frames: List[EmbeddedFrame],
                            video_name: str = "video",
-                           source_file_path: str = "") -> List[Tuple[str, List[float], Dict]]:
+                           source_file_path: str = "",
+                           cloudinary_url: str = None) -> List[Tuple[str, List[float], Dict]]:
         """
         Prepare data for Pinecone upload
         
         Args:
             embedded_frames: List of EmbeddedFrame objects
             video_name: Name of the video for metadata
+            source_file_path: Path to source video file
+            cloudinary_url: URL of video on Cloudinary for playback
             
         Returns:
             List of (id, vector, metadata) tuples for Pinecone
@@ -294,7 +297,8 @@ class TextEmbeddingGenerator:
                 'video_name': video_name,
                 'source_file_path': source_file_path,
                 'video_date': ef.captioned_frame.frame_data.video_date,  # Include video date
-                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', '')  # Include namespace for object detection
+                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', ''),  # Include namespace for object detection
+                'cloudinary_url': cloudinary_url  # Include Cloudinary URL for video playback
             }
             
             pinecone_data.append((unique_id, vector, metadata))

@@ -112,6 +112,8 @@ class VideoSearchEngine:
                      video_path: str,
                      video_name: Optional[str] = None,
                      video_date: Optional[str] = None,
+                     video_id: Optional[str] = None,
+                     cloudinary_url: Optional[str] = None,
                      save_frames: bool = False,
                      upload_to_pinecone: bool = True,
                      use_object_detection: bool = False) -> Dict[str, Any]:
@@ -122,6 +124,8 @@ class VideoSearchEngine:
             video_path: Path to video file
             video_name: Name for the video (uses filename if None)
             video_date: Date when video was recorded (YYYY-MM-DD format, uses today if None)
+            video_id: Unique identifier for the video
+            cloudinary_url: URL of the video on Cloudinary (for playback)
             save_frames: Whether to save extracted frames to disk
             upload_to_pinecone: Whether to upload embeddings to Pinecone
             use_object_detection: Whether to use object detection + captioning pipeline
@@ -254,7 +258,8 @@ class VideoSearchEngine:
                 pinecone_data = self.embedding_generator.prepare_for_pinecone(
                     embedded_frames=embedded_frames,
                     video_name=video_name,
-                    source_file_path=video_path
+                    source_file_path=video_path,
+                    cloudinary_url=cloudinary_url
                 )
                 
                 # Group by namespace if using object detection
@@ -561,6 +566,8 @@ class VideoSearchEngine:
                     "similarity_score": result.score,
                     "frame_id": result.frame_id,
                     "video_name": result.video_name,
+                    "video_date": result.metadata.get('video_date'),
+                    "cloudinary_url": result.metadata.get('cloudinary_url'),
                     "time_formatted": self._format_timestamp(result.timestamp)
                 }
                 formatted_results.append(formatted_result)

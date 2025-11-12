@@ -62,6 +62,8 @@ class ProcessVideoRequest(BaseModel):
     """Request model for video processing"""
     video_name: Optional[str] = None
     video_date: Optional[str] = None
+    video_id: Optional[str] = None
+    cloudinary_url: Optional[str] = None
     save_frames: bool = False
     upload_to_pinecone: bool = True
     use_object_detection: bool = False
@@ -278,6 +280,8 @@ async def process_video_task(job_id: str, video_path: str, request: ProcessVideo
             video_path=video_path,
             video_name=request.video_name,
             video_date=request.video_date,
+            video_id=request.video_id,
+            cloudinary_url=request.cloudinary_url,
             save_frames=request.save_frames,
             upload_to_pinecone=request.upload_to_pinecone,
             use_object_detection=request.use_object_detection
