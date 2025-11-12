@@ -17,7 +17,7 @@ import numpy as np
 from video_search_config import Config
 from frame_extractor import VideoFrameExtractor, FrameData
 from caption_generator import BlipCaptionGenerator, CaptionedFrame
-from embedding_generator import TextEmbeddingGenerator, EmbeddedFrame
+from embedding_generator import TextEmbeddingGenerator, EmbeddedFrame, MultimodalEmbeddingGenerator
 from pinecone_manager import PineconeManager, SearchResult
 from object_caption_pipeline import ObjectCaptionPipeline, ObjectCaption
 from temporal_bootstrapping import TemporalBootstrapper
@@ -90,13 +90,24 @@ class VideoSearchEngine:
             logger.info("Caption generator initialized with multi-caption support")
         
         if not self.embedding_generator:
-            self.embedding_generator = TextEmbeddingGenerator(
-                model_name=self.config.EMBEDDING_MODEL,
-                batch_size=self.config.EMBEDDING_BATCH_SIZE,
-                use_gpu=self.config.USE_GPU,
-                normalize=True
-            )
-            logger.info("Embedding generator initialized")
+            # Prefer multimodal generator when dual embeddings are enabled
+            if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False):
+                self.embedding_generator = MultimodalEmbeddingGenerator(
+                    caption_model=self.config.EMBEDDING_MODEL,
+                    image_model=getattr(self.config, 'CLIP_MODEL_NAME', 'clip-ViT-B-32'),
+                    batch_size=self.config.EMBEDDING_BATCH_SIZE,
+                    use_gpu=self.config.USE_GPU,
+                    normalize=True
+                )
+                logger.info("Multimodal embedding generator initialized (caption + image)")
+            else:
+                self.embedding_generator = TextEmbeddingGenerator(
+                    model_name=self.config.EMBEDDING_MODEL,
+                    batch_size=self.config.EMBEDDING_BATCH_SIZE,
+                    use_gpu=self.config.USE_GPU,
+                    normalize=True
+                )
+                logger.info("Text embedding generator initialized")
         
         if not self.pinecone_manager:
             self.pinecone_manager = PineconeManager(
@@ -115,7 +126,7 @@ class VideoSearchEngine:
                      video_date: Optional[str] = None,
                      save_frames: bool = False,
                      upload_to_pinecone: bool = True,
-                     use_object_detection: bool = False) -> Dict[str, Any]:
+                     use_object_detection: bool = True) -> Dict[str, Any]:
         """
         Process a video file end-to-end
         
@@ -176,6 +187,9 @@ class VideoSearchEngine:
                 except Exception:
                     logger.debug("Thumbnail generation failed; continuing without thumbnails")
             
+            # Enforce object detection mode irrespective of caller input
+            use_object_detection = True
+
             # Step 2: Generate captions
             logger.info("Step 2/4: Generating captions...")
             
@@ -226,6 +240,10 @@ class VideoSearchEngine:
                     filter_empty=True
                 )
             
+            # Fail fast if no captions were produced
+            if not captioned_frames:
+                raise ValueError("No captions were generated for any frames. Captioning is compulsory; check BLIP configuration or input video.")
+
             # Filter duplicate captions
             captioned_frames = self.caption_generator.filter_duplicate_captions(
                 captioned_frames=captioned_frames,
@@ -261,6 +279,16 @@ class VideoSearchEngine:
                     similarity_threshold=0.95
                 )
             logger.info(f"After deduplication: {len(embedded_frames)} unique embeddings")
+
+            # Validate embeddings presence
+            if getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False):
+                # When dual embeddings are enabled, ensure each embedded frame has both caption and image embeddings
+                missing = [
+                    ef.captioned_frame.frame_data.frame_id for ef in embedded_frames
+                    if getattr(ef, 'caption_embedding', None) is None or getattr(ef, 'image_embedding', None) is None
+                ]
+                if missing:
+                    raise ValueError(f"Dual embeddings are enabled but some frames lack caption/image embeddings: {missing[:5]}{'...' if len(missing) > 5 else ''}")
 
             # Compute temporal confidence scores (optional)
             if getattr(self.config, 'ENABLE_TEMPORAL_BOOTSTRAPPING', False):
