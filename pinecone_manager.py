@@ -494,8 +494,29 @@ class PineconeManager:
         if not any(idx.name == index_name for idx in existing_indexes):
             logger.info(f"Index '{index_name}' does not exist; attempting to create it with dim={dimension}")
             try:
-                # Create a serverless index by default
-                self.pc.create_index(name=index_name, dimension=dimension, metric=self.metric)
+                if self.use_serverless:
+                    # Pinecone serverless requires a spec
+                    self.pc.create_index(
+                        name=index_name,
+                        dimension=dimension,
+                        metric=self.metric,
+                        spec=ServerlessSpec(
+                            cloud='aws',
+                            region=self.environment
+                        )
+                    )
+                else:
+                    # Pod-based creation
+                    self.pc.create_index(
+                        name=index_name,
+                        dimension=dimension,
+                        metric=self.metric,
+                        spec=PodSpec(
+                            environment=self.environment,
+                            pod_type='p1.x1',
+                            pods=1
+                        )
+                    )
                 time.sleep(5)
                 logger.info(f"Index '{index_name}' created")
             except Exception as e:
