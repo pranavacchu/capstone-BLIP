@@ -586,9 +586,17 @@ class MultimodalEmbeddingGenerator:
                 caption_embedding,
                 image_embedding
             )
-            
-            # Confidence: how well aligned are caption and image embeddings?
-            alignment_confidence = float(np.dot(caption_embedding, image_embedding))
+
+            # Confidence: compute dot on aligned dimensions
+            # Ensure same dimension for confidence computation
+            if caption_embedding.shape[0] != image_embedding.shape[0]:
+                target_dim = min(caption_embedding.shape[0], image_embedding.shape[0])
+                cap_conf = caption_embedding[:target_dim]
+                img_conf = image_embedding[:target_dim]
+            else:
+                cap_conf = caption_embedding
+                img_conf = image_embedding
+            alignment_confidence = float(np.dot(cap_conf, img_conf))
             
             embedded_frame = EmbeddedFrame(
                 captioned_frame=cf,
@@ -604,6 +612,15 @@ class MultimodalEmbeddingGenerator:
         
         logger.info(f"Generated {len(embedded_frames)} dual embeddings")
         return embedded_frames
+
+    def generate_embeddings(self,
+                            captioned_frames: List[CaptionedFrame],
+                            show_progress: bool = True) -> List[EmbeddedFrame]:
+        """
+        Compatibility wrapper to provide the same API as TextEmbeddingGenerator.
+        Generates dual embeddings and returns the combined embedding as primary.
+        """
+        return self.generate_dual_embeddings(captioned_frames, show_progress=show_progress)
     
     def _combine_embeddings(self,
                            caption_emb: np.ndarray,
