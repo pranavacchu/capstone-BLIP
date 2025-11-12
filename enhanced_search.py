@@ -39,6 +39,7 @@ class EnhancedSearch:
                                   similarity_threshold: float = 0.6,
                                   use_query_expansion: bool = True,
                                   use_reranking: bool = True,
+                                  strict_date_filter: bool = True,
                                   explain: bool = False) -> Dict:
         """
         Perform enhanced search with query understanding
@@ -49,6 +50,7 @@ class EnhancedSearch:
             similarity_threshold: Minimum similarity score
             use_query_expansion: Whether to use query expansion
             use_reranking: Whether to rerank results
+            strict_date_filter: Whether to strictly filter by date (only returns exact date matches)
             explain: Whether to include explanation
             
         Returns:
@@ -77,6 +79,15 @@ class EnhancedSearch:
                 similarity_threshold=similarity_threshold
             )
         
+        # Step 2.5: Apply STRICT date filtering if temporal context exists
+        if strict_date_filter and expanded_query.structured_intent.temporal_context:
+            results = self._apply_strict_date_filter(
+                results=results,
+                temporal_context=expanded_query.structured_intent.temporal_context
+            )
+            if explain:
+                logger.info(f"Applied strict date filter: {len(results)} results remain")
+        
         # Step 3: Rerank results based on query understanding
         if use_reranking and results:
             results = self.query_understanding.rerank_results(
@@ -90,7 +101,8 @@ class EnhancedSearch:
             'results': results[:top_k],  # Limit to top_k after reranking
             'total_results': len(results),
             'intent': expanded_query.structured_intent.primary_intent,
-            'searched_namespaces': expanded_query.target_namespaces
+            'searched_namespaces': expanded_query.target_namespaces,
+            'date_filtered': bool(strict_date_filter and expanded_query.structured_intent.temporal_context)
         }
         
         if explain:
@@ -204,6 +216,54 @@ class EnhancedSearch:
                     unique_results[frame_id] = result
         
         return list(unique_results.values())
+    
+    def _apply_strict_date_filter(self, 
+                                  results: List[Dict],
+                                  temporal_context: Dict) -> List[Dict]:
+        """
+        Apply STRICT date filtering - only returns results matching the exact date(s)
+        
+        Args:
+            results: List of search results
+            temporal_context: Temporal context from query understanding
+            
+        Returns:
+            Filtered results containing only the specified date(s)
+        """
+        if not temporal_context:
+            return results
+        
+        filtered_results = []
+        
+        # Case 1: Specific single date (e.g., "from 2025-11-10" or "yesterday")
+        if 'specific_date' in temporal_context:
+            target_date = temporal_context['specific_date']
+            logger.info(f"Applying STRICT filter: Only showing results from {target_date}")
+            
+            for result in results:
+                result_date = result.get('video_date') or result.get('metadata', {}).get('video_date')
+                if result_date == target_date:
+                    filtered_results.append(result)
+        
+        # Case 2: Date range (e.g., "last week", "from start_date to end_date")
+        elif 'relative_time' in temporal_context and temporal_context['relative_time']:
+            date_range = temporal_context['relative_time']
+            start_date = date_range.get('start')
+            end_date = date_range.get('end')
+            
+            logger.info(f"Applying STRICT filter: Only showing results from {start_date} to {end_date}")
+            
+            for result in results:
+                result_date = result.get('video_date') or result.get('metadata', {}).get('video_date')
+                if result_date and start_date <= result_date <= end_date:
+                    filtered_results.append(result)
+        
+        else:
+            # No specific date filter, return all results
+            filtered_results = results
+        
+        logger.info(f"Date filter: {len(results)} -> {len(filtered_results)} results")
+        return filtered_results
     
     def semantic_search_with_context(self,
                                      query: str,

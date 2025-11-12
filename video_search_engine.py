@@ -511,7 +511,9 @@ class VideoSearchEngine:
                     "similarity_score": result.score,
                     "frame_id": result.frame_id,
                     "video_name": result.video_name,
-                    "time_formatted": self._format_timestamp(result.timestamp)
+                    "video_date": result.metadata.get('video_date', 'unknown'),  # Include video date
+                    "time_formatted": self._format_timestamp(result.timestamp),
+                    "metadata": result.metadata  # Include full metadata for filtering
                 }
                 formatted_results.append(formatted_result)
             
