@@ -204,9 +204,9 @@ class VideoSearchEngine:
                     from object_caption_pipeline import ObjectCaptionPipeline
                     self.object_pipeline = ObjectCaptionPipeline(
                         use_gpu=self.config.USE_GPU,
-                        min_object_size=30,
+                        min_object_size=20,
                         max_objects_per_frame=10,
-                        include_scene_caption=False,  # Don't generate scene captions
+                        include_scene_caption=True,  # Ensure a scene caption even if no objects found
                         caption_similarity_threshold=0.85  # Filter similar captions
                     )
                 
@@ -230,8 +230,16 @@ class VideoSearchEngine:
                     # Store namespace info in frame_data for later use
                     cf.frame_data.namespace = oc.namespace
                     captioned_frames.append(cf)
-                
+
                 logger.info(f"Object detection pipeline generated {len(captioned_frames)} captions")
+
+                # Fallback: If object pipeline produced zero captions, use standard BLIP captioning
+                if not captioned_frames:
+                    logger.warning("Object detection produced no captions; falling back to standard BLIP captioning for scene-level captions.")
+                    captioned_frames = self.caption_generator.generate_captions(
+                        frames=frames,
+                        filter_empty=True
+                    )
                 
             else:
                 # Use standard BLIP captioning
