@@ -622,6 +622,17 @@ class MultimodalEmbeddingGenerator:
         """
         return self.generate_dual_embeddings(captioned_frames, show_progress=show_progress)
     
+    def encode_query(self, query: str) -> np.ndarray:
+        """Encode a text query using the caption model (for search)."""
+        embedding = self.caption_model.encode(
+            query,
+            convert_to_numpy=True,
+            normalize_embeddings=self.normalize
+        )
+        if hasattr(embedding, 'shape') and len(embedding.shape) > 1:
+            embedding = embedding.squeeze()
+        return embedding
+    
     def prepare_for_pinecone(self,
                              embedded_frames: List[EmbeddedFrame],
                              video_name: str = "video",
