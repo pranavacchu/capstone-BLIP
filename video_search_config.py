@@ -53,7 +53,8 @@ class Config:
     EMBEDDING_BATCH_SIZE = 32  # Batch size for embedding generation
     PINECONE_BATCH_SIZE = 100  # Batch size for Pinecone uploads
     # Enhanced options
-    ENABLE_DUAL_EMBEDDINGS = True  # Upload caption/image vectors to separate indices
+    ENABLE_DUAL_EMBEDDINGS = True  # Compute caption + image embeddings and combined vector
+    UPLOAD_SEPARATE_MODALITY_INDICES = False  # If True, upload caption/image vectors to separate indices (may hit index limits)
     ENABLE_TEMPORAL_BOOTSTRAPPING = True  # Compute temporal confidence and smoothing
     CONFIDENCE_THRESHOLD = 0.5  # Default threshold for filtering search results
     # Fusion / multi-index search options

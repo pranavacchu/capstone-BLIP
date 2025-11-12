@@ -391,13 +391,15 @@ class VideoSearchEngine:
                         batch_size=self.config.PINECONE_BATCH_SIZE
                     )
 
-                # If dual embeddings are enabled, upload caption and image embeddings to separate indices
+                # If configured, optionally upload caption/image embeddings to separate indices
                 try:
                     enable_dual = getattr(self.config, 'ENABLE_DUAL_EMBEDDINGS', False)
+                    upload_separate = getattr(self.config, 'UPLOAD_SEPARATE_MODALITY_INDICES', False)
                 except Exception:
                     enable_dual = False
+                    upload_separate = False
 
-                if enable_dual and caption_vectors:
+                if enable_dual and upload_separate and caption_vectors:
                     text_index = getattr(self.config, 'PINECONE_TEXT_INDEX_NAME', self.config.PINECONE_INDEX_NAME)
                     text_dim = getattr(self.config, 'PINECONE_DIMENSION', self.config.PINECONE_DIMENSION)
                     uploaded_text = self.pinecone_manager.upload_embeddings_to_index(
@@ -408,7 +410,7 @@ class VideoSearchEngine:
                     )
                     logger.info(f"Uploaded {uploaded_text} caption vectors to index '{text_index}'")
 
-                if enable_dual and image_vectors:
+                if enable_dual and upload_separate and image_vectors:
                     image_index = getattr(self.config, 'PINECONE_IMAGE_INDEX_NAME', None) or self.config.PINECONE_IMAGE_INDEX_NAME
                     image_dim = getattr(self.config, 'PINECONE_IMAGE_DIMENSION', self.config.PINECONE_IMAGE_DIMENSION)
                     uploaded_image = self.pinecone_manager.upload_embeddings_to_index(
