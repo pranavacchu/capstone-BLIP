@@ -622,6 +622,72 @@ class MultimodalEmbeddingGenerator:
         """
         return self.generate_dual_embeddings(captioned_frames, show_progress=show_progress)
     
+    def prepare_for_pinecone(self,
+                             embedded_frames: List[EmbeddedFrame],
+                             video_name: str = "video",
+                             source_file_path: str = "") -> Dict[str, List[Tuple[str, List[float], Dict]]]:
+        """
+        Prepare multi-index data for Pinecone upload.
+        Returns a dict with keys: 'combined', 'caption', 'image' each mapping to
+        a list of (id, vector, metadata) tuples.
+        """
+        combined_data = []
+        caption_data = []
+        image_data = []
+
+        color_words = set(['black','white','gray','grey','red','orange','yellow','green','blue','purple','pink','brown','beige','tan','gold','silver','navy','maroon','teal'])
+
+        for idx, ef in enumerate(embedded_frames):
+            frame_id = ef.captioned_frame.frame_data.frame_id
+            timestamp = ef.captioned_frame.frame_data.timestamp
+
+            combined_id = f"{frame_id}_obj{idx}_combined"
+            caption_id = f"{frame_id}_obj{idx}_caption"
+            image_id = f"{frame_id}_obj{idx}_image"
+
+            combined_vector = ef.embedding.tolist()
+            caption_vector = ef.caption_embedding.tolist() if ef.caption_embedding is not None else None
+            image_vector = ef.image_embedding.tolist() if ef.image_embedding is not None else None
+
+            caption_text = ef.captioned_frame.caption or ''
+            caption_lower = caption_text.lower()
+            found_colors = [c for c in color_words if c in caption_lower]
+
+            metadata = {
+                'timestamp': timestamp,
+                'caption': caption_text,
+                'frame_id': frame_id,
+                'frame_index': ef.captioned_frame.frame_data.frame_index,
+                'video_name': video_name,
+                'source_file_path': source_file_path,
+                'video_date': ef.captioned_frame.frame_data.video_date,
+                'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', ''),
+                'object_label': getattr(ef.captioned_frame.frame_data, 'object_label', ''),
+                'colors': found_colors,
+                'caption_embedding_id': caption_id,
+                'image_embedding_id': image_id,
+                'combined_confidence': float(ef.embedding_confidence) if ef.embedding_confidence is not None else None,
+                'thumbnail_path': getattr(ef.captioned_frame.frame_data, 'thumbnail_path', None)
+            }
+
+            combined_data.append((combined_id, combined_vector, metadata))
+
+            if caption_vector is not None:
+                caption_meta = metadata.copy()
+                caption_meta.update({'parent_combined_id': combined_id, 'modality': 'caption'})
+                caption_data.append((caption_id, caption_vector, caption_meta))
+
+            if image_vector is not None:
+                image_meta = metadata.copy()
+                image_meta.update({'parent_combined_id': combined_id, 'modality': 'image'})
+                image_data.append((image_id, image_vector, image_meta))
+
+        return {
+            'combined': combined_data,
+            'caption': caption_data,
+            'image': image_data
+        }
+    
     def _combine_embeddings(self,
                            caption_emb: np.ndarray,
                            image_emb: np.ndarray) -> np.ndarray:
