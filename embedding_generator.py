@@ -770,6 +770,20 @@ class MultimodalEmbeddingGenerator:
         self.clear_cache()
         logger.info("Multimodal models unloaded")
 
+    def get_embedding_statistics(self, embedded_frames: List[EmbeddedFrame]) -> Dict:
+        """Get statistics about combined embeddings for multimodal generator"""
+        if not embedded_frames:
+            return {"total": 0}
+        embeddings = np.array([ef.embedding for ef in embedded_frames])
+        stats = {
+            "total": len(embeddings),
+            "dimension": embeddings.shape[1],
+            "mean_norm": float(np.mean(np.linalg.norm(embeddings, axis=1))),
+            "std_norm": float(np.std(np.linalg.norm(embeddings, axis=1))),
+            "mean_similarity": float(np.mean(np.dot(embeddings, embeddings.T)))
+        }
+        return stats
+
 
 # Improved fallback logic for loading image models
 def load_image_model(model_candidates):
