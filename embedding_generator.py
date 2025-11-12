@@ -701,12 +701,15 @@ class MultimodalEmbeddingGenerator:
         Returns:
             Combined embedding
         """
-        # Ensure same dimension by using caption dimension as base
+        # Ensure same dimension by padding the smaller to the larger
         if caption_emb.shape[0] != image_emb.shape[0]:
-            # Project to common dimension (use smaller dimension)
-            target_dim = min(caption_emb.shape[0], image_emb.shape[0])
-            caption_emb = caption_emb[:target_dim]
-            image_emb = image_emb[:target_dim]
+            target_dim = max(caption_emb.shape[0], image_emb.shape[0])
+            if caption_emb.shape[0] < target_dim:
+                pad = np.zeros(target_dim - caption_emb.shape[0], dtype=caption_emb.dtype)
+                caption_emb = np.concatenate([caption_emb, pad], axis=0)
+            if image_emb.shape[0] < target_dim:
+                pad = np.zeros(target_dim - image_emb.shape[0], dtype=image_emb.dtype)
+                image_emb = np.concatenate([image_emb, pad], axis=0)
         
         # Weighted combination
         combined = (self.embedding_weights['caption'] * caption_emb +

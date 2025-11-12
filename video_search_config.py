@@ -19,9 +19,8 @@ class Config:
     # Pinecone Index Configuration
     PINECONE_INDEX_NAME = 'test'
     # Main index dimension (combined vector). With dual embeddings (text 1024 + image 512),
-    # the combined embedding aligns to the smaller dimension (512) for compatibility.
-    # Use 512 here to avoid dimension mismatch during upload.
-    PINECONE_DIMENSION = 512
+    # the combined embedding is padded to the larger dimension (1024) to match existing index configs.
+    PINECONE_DIMENSION = 1024
     PINECONE_METRIC = 'cosine'
     PINECONE_CLOUD = 'aws'
     PINECONE_REGION = 'us-east-1'
