@@ -85,7 +85,9 @@ class VideoSearchEngine:
                 batch_size=self.config.BLIP_BATCH_SIZE,
                 use_gpu=self.config.USE_GPU,
                 generate_multiple_captions=getattr(self.config, 'GENERATE_MULTIPLE_CAPTIONS', False),
-                captions_per_frame=getattr(self.config, 'CAPTIONS_PER_FRAME', 3)
+                captions_per_frame=getattr(self.config, 'CAPTIONS_PER_FRAME', 3),
+                enable_clip_rerank=getattr(self.config, 'ENABLE_CLIP_RERANK', False),
+                clip_rerank_model=getattr(self.config, 'CLIP_RERANK_MODEL', None)
             )
             logger.info("Caption generator initialized with multi-caption support")
         

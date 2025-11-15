@@ -47,6 +47,10 @@ class Config:
     GENERATE_MULTIPLE_CAPTIONS = True  # Generate multiple object-focused captions per frame
     CAPTIONS_PER_FRAME = 5  # Try more variations per frame for better recall
     USE_OBJECT_FOCUSED_PROMPTS = True  # Use object-focused prompts for more detailed descriptions
+    # Use CLIP-based reranking to pick the best caption per frame
+    ENABLE_CLIP_RERANK = True
+    # Optionally override rerank model; if None, fall back to CLIP_MODEL_NAME
+    CLIP_RERANK_MODEL = None
     
     # Processing Configuration
     BLIP_BATCH_SIZE = 8  # Batch size for BLIP caption generation
