@@ -14,7 +14,7 @@ class Config:
     # API Keys (load from environment variables for security)
     PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '')
     PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT', 'us-east-1')
-    PINECONE_HOST = os.getenv('PINECONE_HOST', 'https://test-b5a0x4x.svc.aped-4627-b74a.pinecone.io')
+    PINECONE_HOST = os.getenv('PINECONE_HOST', 'https://test-xp69mf0.svc.aped-4627-b74a.pinecone.io')
     
     # Pinecone Index Configuration
     PINECONE_INDEX_NAME = 'test'
