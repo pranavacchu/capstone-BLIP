@@ -640,7 +640,8 @@ class MultimodalEmbeddingGenerator:
     def prepare_for_pinecone(self,
                              embedded_frames: List[EmbeddedFrame],
                              video_name: str = "video",
-                             source_file_path: str = "") -> Dict[str, List[Tuple[str, List[float], Dict]]]:
+                             source_file_path: str = "",
+                             cloudinary_url: str = None) -> Dict[str, List[Tuple[str, List[float], Dict]]]:
         """
         Prepare multi-index data for Pinecone upload.
         Returns a dict with keys: 'combined', 'caption', 'image' each mapping to
@@ -677,6 +678,7 @@ class MultimodalEmbeddingGenerator:
                 'source_file_path': source_file_path,
                 'video_date': ef.captioned_frame.frame_data.video_date,
                 'namespace': getattr(ef.captioned_frame.frame_data, 'namespace', ''),
+                'cloudinary_url': cloudinary_url,
                 'object_label': getattr(ef.captioned_frame.frame_data, 'object_label', ''),
                 'colors': found_colors,
                 'caption_embedding_id': caption_id,
