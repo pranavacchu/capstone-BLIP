@@ -1418,6 +1418,23 @@ class VideoSearchEngine:
             logger.error(f"Search failed: {e}")
             raise
 
+    def _save_processing_report(self, stats: dict, video_name: str):
+        """
+        Save a processing report (JSON) for the processed video.
+        Args:
+            stats: Dictionary of processing statistics/results
+            video_name: Name of the video (used for filename)
+        """
+        try:
+            reports_dir = os.path.join(self.config.OUTPUT_DIR, "processing_reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            report_path = os.path.join(reports_dir, f"{video_name}_processing_report.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(stats, f, indent=2)
+            logger.info(f"Processing report saved: {report_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save processing report: {e}")
+
 def demo_usage():
     """Demonstrate usage of the Video Search Engine"""
     
