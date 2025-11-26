@@ -11,7 +11,7 @@ class ObjectDetectionConfig:
     
     # Model Configuration
     GROUNDING_DINO_MODEL = "IDEA-Research/grounding-dino-tiny"  # Smaller, faster model for T4
-    BLIP_MODEL = "Salesforce/blip-image-captioning-base"
+    BLIP_MODEL = "Salesforce/blip-image-captioning-large"
     EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
     
     # GPU and Memory Settings

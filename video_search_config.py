@@ -24,7 +24,7 @@ class Config:
     PINECONE_REGION = 'us-east-1'
     
     # Model Configuration
-    BLIP_MODEL = 'Salesforce/blip-image-captioning-base'
+    BLIP_MODEL = 'Salesforce/blip-image-captioning-large'
     # Using multilingual-e5-large for better semantic understanding
     EMBEDDING_MODEL = 'intfloat/multilingual-e5-large'  # 1024 dimensions
     # Alternative: 'sentence-transformers/all-MiniLM-L6-v2' (384 dimensions)

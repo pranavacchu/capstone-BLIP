@@ -28,7 +28,7 @@ class BlipCaptionGenerator:
     """Generate captions for frames using BLIP model"""
     
     def __init__(self, 
-                 model_name: str = "Salesforce/blip-image-captioning-base",
+                 model_name: str = "Salesforce/blip-image-captioning-large",
                  batch_size: int = 8,
                  use_gpu: bool = True,
                  max_length: int = 50,
